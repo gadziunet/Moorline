@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { compareVersions, newestTag, isSemver } from '../src/version.js';
 import { parseImageRef, parseChallenge, localDigests, remoteDigest } from '../src/registry.js';
+import { imagesFor, imagesReady } from '../src/updates.js';
 
 test('version comparison', () => {
   assert.ok(compareVersions('0.1.2', '0.1.1') > 0);
@@ -60,4 +61,14 @@ test('remote digest with token flow', async () => {
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+test('a new release is offered only when its images are built', async () => {
+  assert.deepEqual(imagesFor('v0.11.0', 'example/stackmoor'), [
+    'ghcr.io/example/stackmoor:0.11.0', 'ghcr.io/example/stackmoor-caddy:0.11.0', 'ghcr.io/example/stackmoor-vpn:0.11.0',
+  ]);
+  const built = new Set(imagesFor('0.11.0'));
+  assert.equal(await imagesReady('0.11.0', async (ref) => (built.has(ref) ? 'sha256:x' : null)), true);
+  built.delete(imagesFor('0.11.0')[1]); // Caddy still building
+  assert.equal(await imagesReady('0.11.0', async (ref) => (built.has(ref) ? 'sha256:x' : null)), false);
 });

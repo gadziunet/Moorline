@@ -1711,6 +1711,8 @@ function settingsUpdates(body, s) {
         ${p.url ? `<p><a href="${esc(p.url)}" target="_blank" rel="noopener">${t('upd.releaseLink')}</a></p>` : ''}
         ${howTo}
       </div>`;
+  } else if (p.pending) {
+    panelBox = `<div class="notice info">${t('upd.pending', { version: esc(showVersion(p.latest)) })}</div>`;
   } else if (p.checkedAt) {
     panelBox = `<p class="hint">${p.error ? t('upd.checkError') : t('upd.upToDate')}</p>`;
   }

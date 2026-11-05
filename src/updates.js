@@ -6,6 +6,22 @@ import { VERSION, REPO, compareVersions, isSemver, newestTag } from './version.j
 import { remoteDigest, localDigests, parseImageRef } from './registry.js';
 
 const INTERVALS = { daily: 24 * 3600e3, weekly: 7 * 24 * 3600e3 };
+const PENDING_RECHECK = 10 * 60e3;
+
+/** The images a release needs: the panel, Caddy and the VPN helper. */
+export const imagesFor = (version, repo = REPO) => {
+  const v = String(version).replace(/^v/, '');
+  return [`ghcr.io/${repo}:${v}`, `ghcr.io/${repo}-caddy:${v}`, `ghcr.io/${repo}-vpn:${v}`];
+};
+
+/**
+ * A release shows up on GitHub as soon as it is tagged, but its images are built for a few
+ * minutes more. Offer the update only when all of them are in the registry.
+ */
+export async function imagesReady(version, digest = remoteDigest) {
+  for (const ref of imagesFor(version)) if (!(await digest(ref))) return false;
+  return true;
+}
 const UPDATER_NAME = 'stackmoor-updater';
 
 async function github(pathname) {
@@ -85,6 +101,10 @@ export function createUpdates({ db, stacks, getSettings, onChecked = () => {} })
     const cmp = result.latest ? compareVersions(result.latest, VERSION) : null;
     if (cmp !== null) {
       result.updateAvailable = cmp > 0;
+      if (result.updateAvailable && !(await imagesReady(result.latest))) {
+        result.updateAvailable = false;
+        result.pending = true; // being built – checked again in a few minutes
+      }
     } else {
       // edge or dev build: compare the running image with the registry instead
       const self = await selfInfo();
@@ -176,10 +196,14 @@ export function createUpdates({ db, stacks, getSettings, onChecked = () => {} })
       const last = Date.parse(getState(db, 'update.lastRun') || 0) || 0;
       if (Date.now() - last >= (INTERVALS[s.updateInterval] || INTERVALS.daily)) {
         checkAll().catch((err) => console.error('Update check failed:', err.message));
+      } else if (getState(db, 'update.panel')?.pending) {
+        // A new version whose images are still being built: look again soon.
+        const at = Date.parse(getState(db, 'update.panel').checkedAt || 0) || 0;
+        if (Date.now() - at >= PENDING_RECHECK) checkPanel().then((p) => { if (p.updateAvailable) onChecked(status()); }).catch(() => {});
       }
     };
     setTimeout(tick, 60e3).unref(); // first check a minute after start
-    setInterval(tick, 3600e3).unref();
+    setInterval(tick, PENDING_RECHECK).unref();
   }
 
   /**
@@ -207,6 +231,9 @@ export function createUpdates({ db, stacks, getSettings, onChecked = () => {} })
   async function updatePanel() {
     const self = await selfInfo();
     if (self.mode !== 'compose') throw new UserError('updates.manualOnly', { mode: self.mode });
+    // Nothing new to download yet (e.g. the release is still being built): starting would
+    // only restart the same version.
+    if ((await imageHasUpdate(self.imageRef)) === false) throw new UserError('updates.notReady');
     // A separate short-lived container does the update, because this one is replaced during it.
     await docker(['rm', '-f', UPDATER_NAME]);
     const q = (v) => `'${String(v).replace(/'/g, `'\\''`)}'`;
