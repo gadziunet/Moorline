@@ -24,6 +24,7 @@ import { createProxies, checkTarget, cleanProxy, targetUrl } from './proxies.js'
 import { createAutoUpdate } from './autoupdate.js';
 import { createSystem } from './system.js';
 import { createNotifier, createStackWatch, telegramChats, EVENTS, TYPES } from './notify.js';
+import { createPangolin } from './pangolin.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -63,6 +64,9 @@ domains.vpn.servicesFor = vpn.servicesFor;
 stacks.hooks.beforeUp = vpn.beforeUp;
 stacks.hooks.afterUp = vpn.afterUp;
 vpn.syncImages().catch(() => {}).finally(() => vpn.startMonitor());
+const pangolin = createPangolin({ db, stacksDir: config.stacksDir, stacks, domains });
+domains.pangolin.servicesFor = pangolin.servicesFor;
+setTimeout(() => pangolin.startAll().catch(() => {}), 10e3).unref();
 const proxies = createProxies({
   db, getSettings: () => getSettings(db), reloadConfig: () => domains.reloadConfig(),
   onChange: (p, r) => notify('proxy', { name: p.name, target: targetUrl(p), error: r.error || '' },
@@ -389,6 +393,8 @@ app.delete('/api/stacks/:name', wrap(async (req, res) => {
   const lines = [];
   await stacks.remove(req.params.name, (s) => lines.push(s), req.t);
   await vpn.forgetStack(req.params.name).catch(() => {});
+  await pangolin.removeStack(req.params.name).catch(() => {});
+  backups.setStackExcludes(req.params.name, []);
   if (domains.routes(req.params.name).length) {
     domains.removeStack(req.params.name);
     if (getSettings(db).domain) await domains.apply(() => {}, req.t).catch(() => {});
@@ -444,6 +450,28 @@ app.put('/api/system/schedule', (req, res) => res.json(system.saveSchedule(req.b
 app.put('/api/system/auto-reboot', wrap(async (req, res) => res.json(await system.setAutoReboot(req.body || {}))));
 app.post('/api/system/patches', streamJob((req, write) => system.setPatches(Boolean(req.body?.enabled), write, req.t)));
 
+// ---------- Pangolin (public addresses) ----------
+
+const pangolinState = async () => {
+  const cfg = pangolin.publicConfig();
+  const st = cfg.configured ? await pangolin.status() : { configured: false };
+  return { config: cfg, status: st, routes: pangolin.routes() };
+};
+app.get('/api/pangolin', wrap(async (_req, res) => res.json(await pangolinState())));
+app.put('/api/pangolin', wrap(async (req, res) => { const r = await pangolin.saveConfig(req.body || {}); res.json({ ...(await pangolinState()), domains: r.domains }); }));
+app.post('/api/pangolin/connect', streamJob((req, write) => pangolin.connect(write, req.t)));
+app.delete('/api/pangolin', wrap(async (_req, res) => { await pangolin.disconnect(); res.json(await pangolinState()); }));
+app.get('/api/pangolin/domains', wrap(async (_req, res) => res.json({ domains: await pangolin.listDomains() })));
+app.get('/api/stacks/:name/public', wrap(async (req, res) => {
+  stacks.assertName(req.params.name);
+  const connected = pangolin.configured();
+  const doms = connected ? await pangolin.listDomains().catch(() => null) : null;
+  res.json({ connected, routes: pangolin.routes(req.params.name), domains: doms });
+}));
+app.post('/api/stacks/:name/public', wrap(async (req, res) => res.json(await pangolin.addRoute(req.params.name, req.body || {}))));
+app.put('/api/pangolin/routes/:id', wrap(async (req, res) => res.json(await pangolin.setSso(Number(req.params.id), req.body?.sso))));
+app.delete('/api/pangolin/routes/:id', wrap(async (req, res) => { await pangolin.removeRoute(Number(req.params.id)); res.json({ ok: true }); }));
+
 // ---------- notifications ----------
 
 const notifyState = () => ({
@@ -494,6 +522,15 @@ app.post('/api/backups/test', wrap(async (_req, res) => res.json(await backups.t
 app.post('/api/backups/reveal', (_req, res) => res.json({ password: backups.revealPassword() }));
 
 app.get('/api/backups/status', (_req, res) => res.json(backups.status()));
+
+app.get('/api/stacks/:name/backup-excludes', (req, res) => {
+  stacks.assertName(req.params.name);
+  res.json({ excludes: backups.stackExcludes(req.params.name) });
+});
+app.put('/api/stacks/:name/backup-excludes', (req, res) => {
+  stacks.assertName(req.params.name);
+  res.json({ excludes: backups.setStackExcludes(req.params.name, req.body?.excludes ?? '') });
+});
 
 app.get('/api/backups/snapshots', wrap(async (req, res) => {
   const list = await backups.snapshots({ fresh: req.query.fresh === '1' });

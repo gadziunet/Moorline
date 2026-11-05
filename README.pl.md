@@ -33,6 +33,7 @@ Ponowne uruchomienie tego samego polecenia aktualizuje panel. Opcjonalnie: `curl
 - automatyczne aktualizacje stacków w wybrane dni (domyślnie wyłączone): najpierw kopia, powrót do poprzednich obrazów, gdy nowe się nie uruchomią
 - restart serwera z panelu albo według harmonogramu; stacki, które działały, uruchamiają się ponownie – także te bez `restart:`
 - powiadomienia e-mailem, przez Telegram, ntfy, Pushover albo webhook – np. gdy nie uda się kopia, stack przestanie działać albo padnie VPN
+- publiczne adresy przez Twojego Pangolina – panel sam tworzy site, uruchamia Newt i dodaje zasoby
 - interfejs po polsku i angielsku
 
 ## Automatyczne wolumeny
@@ -114,7 +115,7 @@ To, co idzie tunelem, wynika z `AllowedIPs` w Twoim pliku. **Blokada (kill switc
 - [x] Proxy: adresy w Twojej domenie dla innych serwerów (Proxmox, routery, NAS) ze sprawdzaniem stanu
 - [x] Automatyczne aktualizacje stacków (domyślnie wyłączone) z kopią przed aktualizacją i powrotem do poprzedniej wersji, gdy nowa się nie uruchomi; restart serwera z panelu i według harmonogramu; automatyczne łatki systemu (Debian/Ubuntu)
 - [x] Powiadomienia (e-mail, Telegram, ntfy, Pushover, webhooki): nieudane kopie, stack, który przestał działać, VPN albo proxy nie działa, automatyczne aktualizacje, restarty
-- [ ] Pangolin – publiczne adresy obok lokalnej domeny
+- [x] Pangolin – publiczne adresy obok lokalnej domeny, z logowaniem Pangolina przed aplikacją; foldery pomijane w kopiach
 - [ ] Szablon Unraid w Community Apps
 
 ## Rozwój

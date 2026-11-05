@@ -7,7 +7,7 @@ import { UserError } from './errors.js';
 import { encrypt, decrypt, mask, initSecrets } from './secrets.js';
 import {
   DESTINATIONS, destinationById, repoUrl, dumpKind, dumpCommand, restoreCommand, readyCommand,
-  DUMP_FILE, dataFolders, containerName, retentionArgs, isDue, localParts, newRunId, groupRuns,
+  DUMP_FILE, dataFolders, containerName, retentionArgs, isDue, localParts, newRunId, groupRuns, cleanExcludes, excludeArgs,
 } from './backup-plan.js';
 
 // Backups with restic, the Cloudron way:
@@ -311,11 +311,14 @@ export function createBackups({ db, stacks, stacksDir, dataDir, sqlite }) {
     let cfg = { services: {} };
     try { cfg = await stacks.config(name); } catch { log(t('backup.log.noConfig') + '\n'); }
     const { dumps, excludes } = await dumpDatabases(name, cfg, log, t);
+    const skipped = stackExcludes(name);
     try {
       const args = ['backup', dir, '--host', HOST, '--json', '--exclude-caches',
         ...['stack:' + name, ...tags].flatMap((tag) => ['--tag', tag]),
-        ...excludes.flatMap((e) => ['--exclude', e])];
+        ...excludes.flatMap((e) => ['--exclude', e]),
+        ...excludeArgs(dir, skipped)];
       log(`$ restic backup ${dir}\n`);
+      if (skipped.length) log(`${t('backup.log.skipped', { paths: skipped.join(', ') })}\n`);
       const r = await restic(args, log, { quiet: true });
       if (r.code !== 0 && r.code !== 3) throw new UserError('backup.resticFailed', { output: resticError(r) });
       // Exit code 3: some files could not be read – the snapshot exists but is incomplete.
@@ -762,7 +765,21 @@ export function createBackups({ db, stacks, stacksDir, dataDir, sqlite }) {
     setInterval(tick, 60_000).unref();
   }
 
+  // ---------- paths the user leaves out of a stack's backup ----------
+
+  function stackExcludes(name) { return getState(db, 'backup.excludes', {})[name] || []; }
+
+  function setStackExcludes(name, list) {
+    let clean;
+    try { clean = cleanExcludes(list); } catch (err) { throw new UserError(err.key, err.vars || {}); }
+    const all = getState(db, 'backup.excludes', {});
+    if (clean.length) all[name] = clean; else delete all[name];
+    setState(db, 'backup.excludes', all);
+    return clean;
+  }
+
   return {
+    stackExcludes, setStackExcludes,
     publicConfig, saveConfig, revealPassword, test, status, snapshots, runs, runAll, backupOne, restore,
     restoreRun, restoreServer, serverRestoreStatus, connectExisting, verifyNow, startScheduler, hooks,
     busy: () => Boolean(current),

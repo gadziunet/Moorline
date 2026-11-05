@@ -484,3 +484,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 14px; }
 .nt-name .hint { overflow-wrap: anywhere; font-size: 13px; }
 .nt-actions { gap: 6px; }
 .nt-form { border: 1px solid var(--text); padding: 16px; margin: 0 0 16px; }
+
+/* Public address: subdomain gets the room, the domain list only what it needs */
+.pub-host input { flex: 1 1 120px; min-width: 0; }
+.route-row .pub-host select.lang { flex: 0 1 auto; width: auto; max-width: 60%; }

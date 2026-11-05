@@ -1309,7 +1309,31 @@ async function renderStack(name) {
         </div>
         <div class="card"><div class="row" style="justify-content:space-between;margin-bottom:8px"><h2 style="margin:0">${t('bak.snapshots')}</h2>
           <button type="button" class="btn small" id="sb-refresh" title="${esc(t('bak.refreshTitle'))}">${t('logs.refresh')}</button></div>
-          <div id="sb-snaps"><p class="hint">${t('stack.loading')}</p></div></div>`;
+          <div id="sb-snaps"><p class="hint">${t('stack.loading')}</p></div></div>
+        <form class="card" id="sb-ex-form">
+          <h2>${t('bak.exTitle')}</h2>
+          <p class="hint" style="margin-top:-4px">${t('bak.exLead', { dir: esc(`${state.stacksDir || '/opt/stacks'}/${name}`) })}</p>
+          <textarea id="sb-ex" class="code env" spellcheck="false" placeholder="data/app/cache&#10;data/*/thumbs"></textarea>
+          <p class="hint">${t('bak.exHint')}</p>
+          <div id="sb-ex-out"></div>
+          <button class="btn">${t('set.save')}</button>
+        </form>`;
+      api('GET', `/api/stacks/${name}/backup-excludes`).then((r) => {
+        const ta = document.getElementById('sb-ex');
+        if (ta) ta.value = r.excludes.join('\n');
+      }).catch(() => {});
+      document.getElementById('sb-ex-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const out = document.getElementById('sb-ex-out');
+        try {
+          const r = await api('PUT', `/api/stacks/${name}/backup-excludes`, { excludes: document.getElementById('sb-ex').value });
+          document.getElementById('sb-ex').value = r.excludes.join('\n');
+          out.innerHTML = '';
+          toast(t('set.saved'));
+        } catch (err) {
+          out.innerHTML = errorBox(err);
+        }
+      });
       const loadSnaps = async (fresh = false) => {
         const box = document.getElementById('sb-snaps');
         if (fresh) box.innerHTML = `<p class="hint">${t('stack.loading')}</p>`;
@@ -1436,7 +1460,8 @@ async function renderStack(name) {
       if (currentTab !== 'domain') return;
       if (!info.domain) {
         tab.innerHTML = `<div class="card"><p class="hint">${t('route.noDomain')}</p>
-          <a class="btn" href="#/domains">${t('route.goSettings')}</a></div>`;
+          <a class="btn" href="#/domains">${t('route.goSettings')}</a></div><div id="pub-box"></div>`;
+        publicCard(document.getElementById('pub-box'), name, info.services || []);
         return;
       }
       let rows = info.routes.length ? info.routes.map((r) => ({ ...r })) : [];
@@ -1465,7 +1490,9 @@ async function renderStack(name) {
             </div>
           </div>
           ${info.routes.length ? `<div class="card"><h2>${t('route.open')}</h2><ul class="link-list">${info.routes.map((r) =>
-            `<li><a href="https://${esc(r.subdomain)}.${esc(info.domain)}" target="_blank" rel="noopener">https://${esc(r.subdomain)}.${esc(info.domain)}</a></li>`).join('')}</ul></div>` : ''}`;
+            `<li><a href="https://${esc(r.subdomain)}.${esc(info.domain)}" target="_blank" rel="noopener">https://${esc(r.subdomain)}.${esc(info.domain)}</a></li>`).join('')}</ul></div>` : ''}
+          <div id="pub-box"></div>`;
+        publicCard(document.getElementById('pub-box'), name, info.services || []);
         const read = () => {
           rows = [...tab.querySelectorAll('.route-row')].map((el) => ({
             subdomain: el.querySelector('.r-sub').value.trim().toLowerCase(),
@@ -1650,15 +1677,230 @@ async function renderPage(page) {
 
 /** Network: VPN now, Pangolin later. */
 function renderNetwork(tab = 'vpn') {
+  if (tab !== 'pangolin') tab = 'vpn';
   const main = frame('sub', {
     label: t('nav.network'),
     items: [
-      { href: '#/network/vpn', label: 'VPN', on: true },
-      { label: 'Pangolin', soon: true },
+      { href: '#/network/vpn', label: 'VPN', on: tab === 'vpn' },
+      { href: '#/network/pangolin', label: 'Pangolin', on: tab === 'pangolin' },
     ],
   });
-  main.innerHTML = `<div class="head"><div class="ht"><h1>VPN</h1><p class="lead">${t('vpn.lead')}</p></div></div><div id="set-body"><p class="hint">${t('stack.loading')}</p></div>`;
-  settingsVpn(document.getElementById('set-body'));
+  const title = tab === 'vpn' ? 'VPN' : 'Pangolin';
+  main.innerHTML = `<div class="head"><div class="ht"><h1>${title}</h1><p class="lead">${t(tab === 'vpn' ? 'vpn.lead' : 'pg.lead')}</p></div></div><div id="set-body"><p class="hint">${t('stack.loading')}</p></div>`;
+  (tab === 'vpn' ? settingsVpn : settingsPangolin)(document.getElementById('set-body'));
+}
+
+// ---------- Pangolin ----------
+
+async function settingsPangolin(body, extra = {}) {
+  let d;
+  try {
+    d = await api('GET', '/api/pangolin');
+  } catch (err) {
+    body.innerHTML = errorBox(err);
+    return;
+  }
+  if (route().tab !== 'pangolin') return;
+  const c = d.config;
+  const st = d.status || {};
+  const field = (id, label, value, hint, type = 'text', ph = '') => `
+    <div class="field"><label for="${id}">${t(label)}</label>
+      <input id="${id}" type="${type}" value="${type === 'password' ? '' : esc(value || '')}" placeholder="${esc(type === 'password' ? value || '' : ph)}" autocomplete="off" autocapitalize="off">
+      ${hint ? `<p class="hint">${t(hint)}</p>` : ''}</div>`;
+  const pill = (ok, onText, offText) => `<span class="badge ${ok ? 'running' : 'exited'}">${t(ok ? onText : offText)}</span>`;
+  const siteBox = !c.configured ? '' : `
+    <div class="card">
+      <h2>${t('pg.siteTitle')}</h2>
+      ${st.connected ? `
+        <div class="kv">
+          <span>Newt</span><span>${pill(st.container === 'running', 'pg.running', 'pg.notRunning')}</span>
+          <span>${t('pg.inPangolin')}</span><span>${st.online === null ? '—' : pill(st.online, 'pg.online', 'pg.offline')}</span>
+        </div>
+        ${st.error ? `<div class="notice warn">${esc(st.error.vars?.message || st.error.vars?.error || '')}</div>` : ''}
+        <div class="row">
+          <button type="button" class="btn" id="pg-connect">${t('pg.restartNewt')}</button>
+          <button type="button" class="btn danger" id="pg-disconnect">${t('pg.disconnect')}</button>
+        </div>`
+    : `<p class="hint" style="margin-top:-4px">${t('pg.siteLead')}</p>
+        <button type="button" class="btn primary" id="pg-connect">${t('pg.connect')}</button>`}
+      <div id="pg-op" hidden><pre class="terminal" id="pg-term"></pre></div>
+      <div id="pg-site-out"></div>
+    </div>`;
+  const list = !d.routes?.length ? '' : `
+    <div class="card" style="padding:6px 8px; overflow-x:auto">
+      <h2 style="margin:10px 12px 4px">${t('pg.addresses')}</h2>
+      <table><thead><tr><th>${t('pg.address')}</th><th>${t('au.stack')}</th><th>${t('pg.login')}</th><th></th></tr></thead>
+      <tbody>${d.routes.map((r) => `<tr>
+        <td><a href="https://${esc(r.fullDomain)}" target="_blank" rel="noopener">${esc(r.fullDomain)}</a></td>
+        <td><a href="#/stack/${esc(r.stack)}">${esc(r.stack)}</a> <span class="hint">${esc(r.service)}:${esc(r.port)}</span></td>
+        <td>${r.sso ? `<span class="tag">${t('pg.ssoOn')}</span>` : `<span class="tag bad">${t('pg.ssoOff')}</span>`}</td>
+        <td><button type="button" class="btn small danger pg-del" data-id="${r.id}">${t('nt.delete')}</button></td></tr>`).join('')}</tbody></table>
+      <div id="pg-list-out"></div>
+    </div>`;
+  body.innerHTML = `
+    <form class="card" id="pg-form">
+      <h2>${t('pg.connTitle')}</h2>
+      <p class="hint" style="margin-top:-4px">${t('pg.connLead')}</p>
+      ${field('pg-endpoint', 'pg.endpoint', c.endpoint, 'pg.endpointHint', 'text', 'https://pangolin.example.com')}
+      ${field('pg-api', 'pg.apiUrl', c.apiUrl, 'pg.apiUrlHint', 'text', 'https://api.pangolin.example.com/v1')}
+      <div class="row field" style="align-items:flex-start">
+        <div style="flex:1;min-width:160px">${field('pg-org', 'pg.orgId', c.orgId, '', 'text', 'my-org')}</div>
+        <div style="flex:2;min-width:200px">${field('pg-key', 'pg.apiKey', c.apiKey, '', 'password')}</div>
+      </div>
+      <p class="hint">${t('pg.keyHint')}</p>
+      ${extra.domains ? `<div class="notice">${t('pg.domainsFound', { list: esc(extra.domains.map((x) => x.baseDomain).join(', ') || '—') })}</div>` : ''}
+      <div id="pg-out"></div>
+      <button class="btn primary">${t('pg.saveCheck')}</button>
+    </form>
+    ${siteBox}
+    ${list}`;
+
+  document.getElementById('pg-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const out = document.getElementById('pg-out');
+    out.innerHTML = `<p class="hint">${t('pg.checking')}</p>`;
+    try {
+      const r = await api('PUT', '/api/pangolin', {
+        endpoint: document.getElementById('pg-endpoint').value,
+        apiUrl: document.getElementById('pg-api').value,
+        orgId: document.getElementById('pg-org').value,
+        apiKey: document.getElementById('pg-key').value,
+      });
+      toast(t('set.saved'));
+      settingsPangolin(body, { domains: r.domains });
+    } catch (err) {
+      out.innerHTML = errorBox(err);
+    }
+  });
+  document.getElementById('pg-connect')?.addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    const pre = document.getElementById('pg-term');
+    document.getElementById('pg-op').hidden = false;
+    pre.textContent = '';
+    const code = await stream('POST', '/api/pangolin/connect', (txt) => appendTo(pre, txt)).catch((err) => { appendTo(pre, `\n${err.message}\n`); return 1; });
+    toast(t(code === 0 ? 'toast.done' : 'toast.failed'));
+    if (code === 0) setTimeout(() => { if (route().tab === 'pangolin') settingsPangolin(body); }, 3000);
+    else e.target.disabled = false;
+  });
+  body.querySelectorAll('.pg-del').forEach((b) => b.addEventListener('click', async () => {
+    if (!confirm(t('pg.deleteConfirm'))) return;
+    b.disabled = true;
+    try { await api('DELETE', `/api/pangolin/routes/${b.dataset.id}`); settingsPangolin(body); } catch (err) {
+      document.getElementById('pg-list-out').innerHTML = errorBox(err);
+      b.disabled = false;
+    }
+  }));
+  document.getElementById('pg-disconnect')?.addEventListener('click', async (e) => {
+    if (!confirm(t('pg.disconnectConfirm', { n: d.routes?.length || 0 }))) return;
+    e.target.disabled = true;
+    try {
+      await api('DELETE', '/api/pangolin');
+      toast(t('toast.done'));
+      settingsPangolin(body);
+    } catch (err) {
+      document.getElementById('pg-site-out').innerHTML = errorBox(err);
+      e.target.disabled = false;
+    }
+  });
+}
+
+/** The stack's Domain tab: public addresses through Pangolin. */
+async function publicCard(box, name, services) {
+  if (!box) return;
+  let d;
+  try {
+    d = await api('GET', `/api/stacks/${name}/public`);
+  } catch (err) {
+    box.innerHTML = `<div class="card">${errorBox(err)}</div>`;
+    return;
+  }
+  if (!box.isConnected) return;
+  if (!d.connected) {
+    box.innerHTML = `<div class="card"><h2>${t('pg.publicTitle')}</h2><p class="hint" style="margin-top:-4px">${t('pg.publicOff')}</p>
+      <a class="btn" href="#/network/pangolin">${t('pg.goSettings')}</a></div>`;
+    return;
+  }
+  const doms = d.domains || [];
+  const svcOptions = services.map((sv) => `<option value="${esc(sv.name)}">${esc(sv.name)}</option>`).join('');
+  const port0 = services[0]?.ports?.[0] || '';
+  box.innerHTML = `
+    <div class="card">
+      <h2>${t('pg.publicTitle')}</h2>
+      <p class="hint" style="margin-top:-4px">${t('pg.publicLead')}</p>
+      ${d.routes.length ? `<div class="nt-list">${d.routes.map((r) => `
+        <div class="nt-row" data-id="${r.id}">
+          <div class="nt-name"><a href="https://${esc(r.fullDomain)}" target="_blank" rel="noopener"><strong>https://${esc(r.fullDomain)}</strong></a><span class="hint">${esc(r.service)}:${esc(r.port)}</span></div>
+          <label class="check"><input type="checkbox" class="pub-sso" ${r.sso ? 'checked' : ''}> ${t('pg.login')}</label>
+          <button type="button" class="btn danger pub-del">${t('nt.delete')}</button>
+        </div>`).join('')}</div>` : `<p class="hint">${t('pg.noPublic')}</p>`}
+      ${!doms.length ? `<div class="notice warn">${t('pg.noDomains')}</div>` : `
+      <form id="pub-form" class="nt-form" style="margin-top:14px">
+        <h3>${t('pg.addPublic')}</h3>
+        <div class="route-row">
+          <div class="route-host pub-host"><input type="text" id="pub-sub" value="${esc(name)}" aria-label="${esc(t('route.subdomain'))}" autocapitalize="off">
+            <span>.</span><select id="pub-dom" class="lang">${doms.map((x) => `<option value="${esc(x.domainId)}" data-type="${esc(x.type)}">${esc(x.baseDomain)}</option>`).join('')}</select></div>
+          <select id="pub-svc" class="lang" aria-label="${esc(t('route.service'))}">${svcOptions}</select>
+          <input type="number" id="pub-port" value="${esc(port0)}" min="1" max="65535" aria-label="${esc(t('route.port'))}" placeholder="${esc(t('route.port'))}">
+        </div>
+        <label class="check field"><input type="checkbox" id="pub-sso" checked> <span>${t('pg.ssoLabel')}</span></label>
+        <div id="pub-out"></div>
+        <button class="btn primary">${t('pg.addPublicBtn')}</button>
+      </form>`}
+      <div id="pub-list-out"></div>
+    </div>`;
+  const refresh = () => publicCard(box, name, services);
+  box.querySelector('#pub-svc')?.addEventListener('change', (e) => {
+    document.getElementById('pub-port').value = services.find((x) => x.name === e.target.value)?.ports?.[0] || '';
+  });
+  // A CNAME domain in Pangolin is used as it is – no subdomain.
+  const domSel = box.querySelector('#pub-dom');
+  const syncSub = () => {
+    const cname = domSel.selectedOptions[0]?.dataset.type === 'cname';
+    const sub = document.getElementById('pub-sub');
+    sub.disabled = cname;
+    sub.nextElementSibling.hidden = cname;
+  };
+  domSel?.addEventListener('change', syncSub);
+  if (domSel) syncSub();
+  box.querySelector('#pub-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const sso = document.getElementById('pub-sso').checked;
+    if (!sso && !confirm(t('pg.ssoOffConfirm'))) return;
+    const btn = e.target.querySelector('.btn.primary');
+    btn.disabled = true;
+    try {
+      await api('POST', `/api/stacks/${name}/public`, {
+        subdomain: document.getElementById('pub-sub').disabled ? '' : document.getElementById('pub-sub').value,
+        domainId: domSel.value,
+        service: document.getElementById('pub-svc').value,
+        port: Number(document.getElementById('pub-port').value),
+        sso,
+      });
+      toast(t('pg.added'));
+      refresh();
+    } catch (err) {
+      document.getElementById('pub-out').innerHTML = errorBox(err);
+      btn.disabled = false;
+    }
+  });
+  box.querySelectorAll('.nt-row[data-id]').forEach((row) => {
+    const id = row.dataset.id;
+    row.querySelector('.pub-sso').addEventListener('change', async (e) => {
+      if (!e.target.checked && !confirm(t('pg.ssoOffConfirm'))) { e.target.checked = true; return; }
+      try { await api('PUT', `/api/pangolin/routes/${id}`, { sso: e.target.checked }); toast(t('set.saved')); } catch (err) {
+        e.target.checked = !e.target.checked;
+        document.getElementById('pub-list-out').innerHTML = errorBox(err);
+      }
+    });
+    row.querySelector('.pub-del').addEventListener('click', async (e) => {
+      if (!confirm(t('pg.deleteConfirm'))) return;
+      e.target.disabled = true;
+      try { await api('DELETE', `/api/pangolin/routes/${id}`); refresh(); } catch (err) {
+        document.getElementById('pub-list-out').innerHTML = errorBox(err);
+        e.target.disabled = false;
+      }
+    });
+  });
 }
 
 function settingsGeneral(body, s) {

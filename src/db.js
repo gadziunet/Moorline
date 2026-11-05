@@ -65,6 +65,24 @@ const MIGRATIONS = [
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
   );
   `,
+  // Public addresses through Pangolin (one Pangolin resource + target per row).
+  `
+  CREATE TABLE pangolin_routes (
+    id          INTEGER PRIMARY KEY,
+    stack       TEXT NOT NULL,
+    service     TEXT NOT NULL,
+    port        INTEGER NOT NULL,
+    domain_id   TEXT NOT NULL,
+    subdomain   TEXT,
+    full_domain TEXT NOT NULL,
+    sso         INTEGER NOT NULL DEFAULT 1,
+    resource_id INTEGER NOT NULL,
+    target_id   INTEGER,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX pangolin_routes_stack ON pangolin_routes(stack);
+  CREATE UNIQUE INDEX pangolin_routes_domain ON pangolin_routes(full_domain);
+  `,
 ];
 
 export const DEFAULT_SETTINGS = {

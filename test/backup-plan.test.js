@@ -110,3 +110,14 @@ test('runs: snapshots from 0.5 (no run tag) are grouped by time around system sn
   assert.equal(byId['legacy-m'].stacks.length, 1);
   assert.equal(runs.length, 4);
 });
+
+test('paths left out of a stack backup', async () => {
+  const { cleanExcludes, excludeArgs } = await import('../src/backup-plan.js');
+  assert.deepEqual(cleanExcludes('data/app/cache\n\n ./data/*/thumbs/ \ndata/app/cache'), ['data/app/cache', 'data/*/thumbs']);
+  assert.throws(() => cleanExcludes('/etc'), { key: 'backup.badExclude' });
+  assert.throws(() => cleanExcludes('compose.yaml'), { key: 'backup.badExclude' });
+  assert.throws(() => cleanExcludes('**'), { key: 'backup.badExclude' });
+  assert.throws(() => cleanExcludes('data/../../etc'), { key: 'backup.badExclude' });
+  assert.deepEqual(excludeArgs('/opt/stacks/immich/', ['data/thumbs', 'data/**/cache']),
+    ['--exclude', '/opt/stacks/immich/data/thumbs', '--exclude', '/opt/stacks/immich/data/**/cache']);
+});

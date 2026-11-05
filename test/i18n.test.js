@@ -24,7 +24,7 @@ for (const file of ['../src/i18n.js', '../public/i18n.js']) {
 test('every key used by the server exists', () => {
   const en = keysOf('../src/i18n.js', 'en');
   const used = new Set();
-  for (const f of ['server.js', 'stacks.js', 'compose.js', 'auth.js', 'proxies.js', 'autoupdate.js', 'system.js', 'notify.js']) {
+  for (const f of ['server.js', 'stacks.js', 'compose.js', 'auth.js', 'proxies.js', 'autoupdate.js', 'system.js', 'notify.js', 'pangolin.js']) {
     const src = fs.readFileSync(new URL(`../src/${f}`, import.meta.url), 'utf8');
     for (const m of src.matchAll(/(?:UserError\(|\bt\(|req\.t\(|fail\(req, res, \d+, |key: )'([\w.]+)'/g)) used.add(m[1]);
     for (const m of src.matchAll(/return '(auth\.[\w.]+)'/g)) used.add(m[1]);

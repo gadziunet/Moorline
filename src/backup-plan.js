@@ -234,3 +234,32 @@ export function groupRuns(snapshots) {
   for (const r of runs.values()) r.stacks.sort((a, b) => (a.stack || '').localeCompare(b.stack || ''));
   return [...runs.values()].sort((a, b) => b.time.localeCompare(a.time));
 }
+
+// ---------- paths left out of a stack's backup ----------
+
+/**
+ * Checks the user's list of paths to leave out (relative to the stack folder, globs allowed,
+ * e.g. "data/immich/thumbs" or "data/*\/cache"). Throws UserError-like { key } on a bad one.
+ */
+export function cleanExcludes(list) {
+  const lines = (Array.isArray(list) ? list : String(list ?? '').split('\n'))
+    .map((x) => String(x).trim().replace(/^\.\//, '').replace(/\/+$/, ''))
+    .filter(Boolean);
+  const out = [];
+  for (const p of lines) {
+    // Never the stack's own files (a backup without them can't be restored) or everything.
+    const needed = /^(\*\*?|compose\.ya?ml|docker-compose\.ya?ml|\.env|compose\.stackmoor\.yaml)$/i.test(p);
+    if (needed || p.startsWith('/') || p.split('/').includes('..') || p.length > 200 || /[\0\r]/.test(p)) {
+      const err = new Error(`bad exclude: ${p}`);
+      err.key = 'backup.badExclude';
+      err.vars = { path: p };
+      throw err;
+    }
+    if (!out.includes(p)) out.push(p);
+  }
+  if (out.length > 50) { const err = new Error('too many'); err.key = 'backup.tooManyExcludes'; throw err; }
+  return out;
+}
+
+/** restic --exclude arguments: each path anchored in the stack folder. */
+export const excludeArgs = (dir, patterns) => patterns.flatMap((p) => ['--exclude', `${dir.replace(/\/+$/, '')}/${p}`]);
