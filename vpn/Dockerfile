@@ -1,7 +1,7 @@
 # WireGuard client used by Stackmoor's "Connect through VPN" (see src/vpn.js).
 # Chosen services of a stack share this container's network, so their traffic leaves
 # through the tunnel. A kill switch (written by the panel) blocks everything else.
-FROM alpine:3.20
+FROM alpine:3.24
 RUN apk add --no-cache bash iproute2 iptables ip6tables wireguard-tools
 # In a container /proc/sys is read-only: wg-quick must not try to set src_valid_mark when
 # Docker already did (compose "sysctls"). Same fix as in linuxserver/wireguard. The grep

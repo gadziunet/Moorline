@@ -17,7 +17,7 @@ LABEL org.opencontainers.image.title="stackmoor" \
 COPY --from=docker:cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=docker:cli /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose
 # restic for backups (static binary from the official image).
-COPY --from=restic/restic:0.18.0 /usr/bin/restic /usr/local/bin/restic
+COPY --from=restic/restic:0.19.1 /usr/bin/restic /usr/local/bin/restic
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json ./

@@ -4,6 +4,7 @@
 // helper container that enters the host (the panel controls Docker already, so this gives
 // it nothing new).
 import fs from 'node:fs';
+import os from 'node:os';
 import { docker } from './docker.js';
 import { getState, setState } from './db.js';
 import { UserError } from './errors.js';
@@ -109,7 +110,13 @@ export function createSystem({ db, stacks, updates, backups, autoUpdate, getSett
 
   async function info({ fresh = false } = {}) {
     if (!fresh && cache && Date.now() - cache.at < 5 * 60e3) return cache.value;
-    const base = { uptime: readUptime(), reboots: getState(db, 'system.reboots', []).slice(0, 5), schedule: schedule() };
+    const base = {
+      uptime: readUptime(),
+      kernel: os.release(), // containers share the server's kernel
+      caddy: await caddyVersion(),
+      reboots: getState(db, 'system.reboots', []).slice(0, 5),
+      schedule: schedule(),
+    };
     let host = null;
     let error = null;
     try {
@@ -122,6 +129,12 @@ export function createSystem({ db, stacks, updates, backups, autoUpdate, getSett
     const value = { ...base, host, error };
     cache = { at: Date.now(), value };
     return value;
+  }
+
+  /** "v2.11.8" from the running Caddy, or null when there is no Caddy (no domain set up). */
+  async function caddyVersion() {
+    const r = await docker(['exec', 'stackmoor-caddy', 'caddy', 'version']).catch(() => null);
+    return r?.code === 0 ? r.stdout.trim().split(/\s+/)[0] || null : null;
   }
 
   // ---------- stacks that were running before a restart ----------

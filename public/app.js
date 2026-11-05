@@ -545,10 +545,12 @@ function renderShell() {
         <div id="update-banner"></div>
         <div id="global-warning"></div>
         <div class="content" id="content"></div>
-        <footer class="statusbar" id="statusbar" aria-label="${esc(t('bar.label'))}"></footer>
-        <nav class="bottom-nav" aria-label="Stackmoor">
-          ${NAV.map(([k, href, label, icon]) => `<a href="${href}" data-nav="${k}">${svg(ICON[icon], 20)}${t(label)}</a>`).join('')}
-        </nav>
+        <div class="dock">
+          <footer class="statusbar" id="statusbar" aria-label="${esc(t('bar.label'))}"></footer>
+          <nav class="bottom-nav" aria-label="Stackmoor">
+            ${NAV.map(([k, href, label, icon]) => `<a href="${href}" data-nav="${k}">${svg(ICON[icon], 20)}${t(label)}</a>`).join('')}
+          </nav>
+        </div>
       </div>`;
     bindShell();
   }
@@ -1938,6 +1940,8 @@ async function settingsServer(body, fresh = false) {
       ${h?.rebootRequired ? `<div class="notice warn"><strong>${t('sys.rebootRequired')}</strong>${h.packages.length ? `<div class="hint" style="margin-top:4px">${t('sys.rebootPackages', { list: esc(h.packages.join(', ')) })}</div>` : ''}</div>` : ''}
       <div class="kv">
         ${h ? `<span>${t('sys.os')}</span><strong>${esc(h.os || '—')}</strong>` : ''}
+        ${d.kernel ? `<span>${t('sys.kernel')}</span><span>${esc(d.kernel)}</span>` : ''}
+        ${d.caddy ? `<span>Caddy</span><span>${esc(d.caddy)}</span>` : ''}
         <span>${t('sys.uptime')}</span><span>${esc(fmtUptime(d.uptime))}</span>
         <span>${t('sys.lastReboot')}</span><span>${last ? `${esc(fmtDate(last.at))} <span class="hint">${t(last.kind === 'scheduled' ? 'sys.kind.scheduled' : 'sys.kind.manual')}</span>` : '—'}</span>
       </div>

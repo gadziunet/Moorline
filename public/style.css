@@ -142,8 +142,9 @@ code, pre, textarea.code { font-family: var(--mono); font-size: 12.5px; }
 .statusbar {
   display: flex; flex-wrap: wrap; align-items: center; gap: 4px 24px; min-height: 32px; padding: 6px 32px;
   background: var(--bar-bg); color: var(--bar-text); font-family: var(--mono); font-size: 12px;
-  position: sticky; bottom: 0; z-index: 10;
 }
+/* The status bar and (on phones) the bottom menu stick to the bottom together – no gap between them. */
+.dock { position: sticky; bottom: 0; z-index: 10; }
 .statusbar a { color: var(--bar-text); text-decoration: none; }
 .statusbar a:hover { text-decoration: underline; }
 .statusbar .ok { color: var(--bar-ok); }
@@ -438,10 +439,10 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 14px; }
   .main { padding: 16px 16px 24px; }
   .notice.global, .update-banner { padding: 10px 16px; }
   .update-banner .acts { margin-left: 0; }
-  .statusbar { padding: 7px 16px; gap: 4px 12px; font-size: 11px; flex-wrap: nowrap; white-space: nowrap; overflow: hidden; bottom: 69px; }
+  .statusbar { padding: 7px 16px; gap: 4px 12px; font-size: 11px; flex-wrap: nowrap; white-space: nowrap; overflow: hidden; }
   .bottom-nav {
     display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
-    position: sticky; bottom: 0; z-index: 10; background: var(--bg); border-top: 1px solid var(--line);
+    background: var(--bg); border-top: 1px solid var(--line);
     padding-bottom: env(safe-area-inset-bottom);
   }
   .bottom-nav a { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; min-height: 56px; font-size: 11px; color: var(--muted); text-decoration: none; }
