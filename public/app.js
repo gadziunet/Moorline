@@ -1613,7 +1613,7 @@ function revealActiveTab(nav, smooth = false) {
   nav.scrollTo({ left: Math.max(0, left), behavior: smooth ? 'smooth' : 'auto' });
 }
 
-const SETTINGS_TABS = ['panel', 'updates', 'server', 'folders'];
+const SETTINGS_TABS = ['panel', 'updates', 'server', 'notify', 'folders'];
 
 async function renderSettings(tab = 'panel') {
   if (!SETTINGS_TABS.includes(tab)) tab = 'panel';
@@ -1626,6 +1626,7 @@ async function renderSettings(tab = 'panel') {
   try {
     if (tab === 'panel') return await settingsPanel(body);
     if (tab === 'server') return await settingsServer(body);
+    if (tab === 'notify') return await settingsNotify(body);
     const s = await api('GET', '/api/settings');
     if (route().tab !== tab) return;
     (tab === 'updates' ? settingsUpdates : settingsGeneral)(body, s);
@@ -2004,6 +2005,206 @@ async function settingsServer(body, fresh = false) {
       document.getElementById('sys-ar-out').innerHTML = errorBox(err);
     }
   });
+}
+
+// ---------- notifications ----------
+
+const NT_EVENTS = [
+  ['problems', ['backupFailed', 'stackDown', 'vpn', 'proxy', 'autoProblem', 'rebootRequired']],
+  ['info', ['booted', 'panelUpdate', 'autoUpdated', 'stackUpdates', 'backupOk']],
+];
+// Fields of each channel type: [name, kind, required]
+const NT_FIELDS = {
+  email: [['host', 'text', true], ['port', 'number'], ['security', 'security'], ['user', 'text'], ['pass', 'secret'], ['from', 'text', true], ['to', 'text', true], ['insecure', 'check']],
+  telegram: [['token', 'secret', true], ['chatId', 'text', true]],
+  ntfy: [['server', 'text'], ['topic', 'text', true], ['token', 'secret']],
+  pushover: [['user', 'secret', true], ['token', 'secret', true]],
+  webhook: [['url', 'secret', true]],
+};
+function ntTarget(c) {
+  if (c.type === 'email') return c.to;
+  if (c.type === 'telegram') return `chat ${c.chatId}`;
+  if (c.type === 'ntfy') return `${String(c.server || '').replace(/^https?:\/\//, '')}/${c.topic}`;
+  if (c.type === 'webhook') return c.url;
+  return '';
+}
+
+async function settingsNotify(body, d = null) {
+  if (!d) {
+    try {
+      d = await api('GET', '/api/notify');
+    } catch (err) {
+      body.innerHTML = errorBox(err);
+      return;
+    }
+  }
+  if (route().tab !== 'notify') return;
+  const ev = d.prefs.events;
+  body.innerHTML = `
+    <div class="card">
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <h2 style="margin:0">${t('nt.channels')}</h2>
+        <button type="button" class="btn primary" id="nt-add">${t('nt.add')}</button>
+      </div>
+      <p class="hint" style="margin:6px 0 12px">${t('nt.channelsLead')}</p>
+      <div id="nt-form-box"></div>
+      ${d.channels.length ? `<div class="nt-list">${d.channels.map((c) => `
+        <div class="nt-row ${c.enabled ? '' : 'off'}" data-id="${esc(c.id)}">
+          <span class="tag">${esc(t(`nt.type.${c.type}`))}</span>
+          <div class="nt-name"><strong>${esc(c.name)}</strong><span class="hint">${esc(ntTarget(c))}</span></div>
+          <label class="check"><input type="checkbox" class="nt-on" ${c.enabled ? 'checked' : ''}> ${t('nt.enabled')}</label>
+          <div class="row nt-actions">
+            <button type="button" class="btn" data-nt="test">${t('nt.test')}</button>
+            <button type="button" class="btn" data-nt="edit">${t('nt.edit')}</button>
+            <button type="button" class="btn danger" data-nt="delete">${t('nt.delete')}</button>
+          </div>
+        </div>`).join('')}</div>` : `<p class="hint">${t('nt.none')}</p>`}
+      <div id="nt-out"></div>
+    </div>
+
+    <form class="card" id="nt-prefs">
+      <h2>${t('nt.events')}</h2>
+      ${NT_EVENTS.map(([group, keys]) => `
+        <div class="field"><label>${t(`nt.group.${group}`)}</label>
+          ${keys.map((k) => `<label class="check" style="margin:6px 0"><input type="checkbox" class="nt-ev" value="${k}" ${ev[k] ? 'checked' : ''}> <span>${t(`nt.ev.${k}`)}</span></label>`).join('')}
+        </div>`).join('')}
+      <div class="field" style="max-width:360px"><label for="nt-server">${t('nt.serverName')}</label>
+        <input id="nt-server" value="${esc(d.prefs.serverName)}" placeholder="Stackmoor" maxlength="40">
+        <p class="hint">${t('nt.serverNameHint')}</p></div>
+      <div id="nt-prefs-out"></div>
+      <button class="btn primary">${t('set.save')}</button>
+    </form>
+
+    <div class="card" style="padding:6px 8px; overflow-x:auto">
+      <h2 style="margin:10px 12px 4px">${t('nt.history')}</h2>
+      ${d.history.length ? `<table>
+        <thead><tr><th>${t('au.when')}</th><th>${t('nt.message')}</th><th>${t('nt.channel')}</th><th>${t('au.result')}</th></tr></thead>
+        <tbody>${d.history.map((h) => `
+          <tr><td>${esc(fmtDate(h.at))}</td><td>${esc(h.title)}</td><td>${esc(h.channel)}</td>
+            <td>${h.ok ? `<span class="badge running">${t('nt.sent')}</span>` : `<span class="badge exited">${t('nt.failed')}</span><br><span class="hint">${esc(h.error || '')}</span>`}</td></tr>`).join('')}</tbody>
+      </table>` : `<p class="hint" style="margin:4px 12px 12px">${t('nt.historyNone')}</p>`}
+    </div>`;
+
+  const out = document.getElementById('nt-out');
+  const refresh = (data) => settingsNotify(body, data);
+  document.getElementById('nt-add').addEventListener('click', () => ntForm(body, null, refresh));
+  body.querySelectorAll('.nt-row').forEach((row) => {
+    const id = row.dataset.id;
+    const ch = d.channels.find((c) => c.id === id);
+    row.querySelector('.nt-on').addEventListener('change', async (e) => {
+      try { refresh(await api('PUT', `/api/notify/channels/${id}`, { enabled: e.target.checked })); } catch (err) { out.innerHTML = errorBox(err); }
+    });
+    row.querySelectorAll('[data-nt]').forEach((b) => b.addEventListener('click', async () => {
+      const act = b.dataset.nt;
+      if (act === 'edit') return ntForm(body, ch, refresh);
+      if (act === 'delete' && !confirm(t('nt.deleteConfirm', { name: ch.name }))) return;
+      b.disabled = true;
+      try {
+        if (act === 'test') {
+          const data = await api('POST', `/api/notify/channels/${id}/test`);
+          toast(t('nt.testSent', { name: ch.name }));
+          refresh(data);
+        } else {
+          refresh(await api('DELETE', `/api/notify/channels/${id}`));
+        }
+      } catch (err) {
+        // A failed test is also in the history: show it there, and the reason above.
+        if (act === 'test') await refresh(await api('GET', '/api/notify').catch(() => d));
+        document.getElementById('nt-out').innerHTML = errorBox(err);
+        b.disabled = false;
+      }
+    }));
+  });
+  document.getElementById('nt-prefs').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      await api('PUT', '/api/notify/prefs', {
+        serverName: document.getElementById('nt-server').value,
+        timeZone: browserZone(),
+        events: Object.fromEntries([...document.querySelectorAll('.nt-ev')].map((x) => [x.value, x.checked])),
+      });
+      document.getElementById('nt-prefs-out').innerHTML = '';
+      toast(t('set.saved'));
+    } catch (err) {
+      document.getElementById('nt-prefs-out').innerHTML = errorBox(err);
+    }
+  });
+}
+
+/** Adding or editing a channel. */
+function ntForm(body, ch, done) {
+  const box = document.getElementById('nt-form-box');
+  const type0 = ch?.type || 'telegram';
+  const field = (type, [name, kind, req]) => {
+    const id = `ntf-${name}`;
+    const label = `<label for="${id}">${t(`nt.f.${type}.${name}`)}${req ? '' : ` <span class="hint">${t('nt.optional')}</span>`}</label>`;
+    const v = ch?.type === type ? ch[name] ?? '' : '';
+    const hint = t(`nt.h.${type}.${name}`) !== `nt.h.${type}.${name}` ? `<p class="hint">${t(`nt.h.${type}.${name}`)}</p>` : '';
+    if (kind === 'check') return `<label class="check field"><input type="checkbox" id="${id}" ${v ? 'checked' : ''}> <span>${t(`nt.f.${type}.${name}`)}</span></label>`;
+    if (kind === 'security') {
+      return `<div class="field">${label}<select id="${id}" class="lang">${['starttls', 'tls', 'none'].map((x) => `<option value="${x}" ${(v || 'starttls') === x ? 'selected' : ''}>${t(`nt.sec.${x}`)}</option>`).join('')}</select></div>`;
+    }
+    const extra = type === 'telegram' && name === 'chatId'
+      ? `<button type="button" class="btn" id="nt-find-chat">${t('nt.findChat')}</button>` : '';
+    const input = `<input id="${id}" type="${kind === 'secret' ? 'password' : kind === 'number' ? 'number' : 'text'}" ${kind === 'secret' ? `placeholder="${esc(v)}" autocomplete="new-password"` : `value="${esc(v)}"`} ${type === 'ntfy' && name === 'server' ? 'placeholder="https://ntfy.sh"' : ''}>`;
+    return `<div class="field">${label}${extra ? `<div class="row" style="flex-wrap:nowrap">${input.replace('<input', '<input style="flex:1;min-width:0"')}${extra}</div>` : input}${hint}<div id="${id}-more"></div></div>`;
+  };
+  const render = (type) => {
+    box.innerHTML = `
+      <form class="nt-form" id="nt-form">
+        <h3>${ch ? t('nt.editTitle', { name: esc(ch.name) }) : t('nt.addTitle')}</h3>
+        <div class="row field" style="align-items:flex-start">
+          <div style="flex:1;min-width:160px"><label for="ntf-type">${t('nt.typeLabel')}</label>
+            <select id="ntf-type" class="lang" ${ch ? 'disabled' : ''}>${Object.keys(NT_FIELDS).map((x) => `<option value="${x}" ${x === type ? 'selected' : ''}>${t(`nt.type.${x}`)}</option>`).join('')}</select></div>
+          <div style="flex:2;min-width:180px"><label for="ntf-name">${t('nt.nameLabel')}</label>
+            <input id="ntf-name" value="${esc(ch?.name || '')}" placeholder="${esc(t(`nt.type.${type}`))}" maxlength="40"></div>
+        </div>
+        <p class="hint" style="margin:-4px 0 14px">${t(`nt.how.${type}`)}</p>
+        ${NT_FIELDS[type].map((f) => field(type, f)).join('')}
+        <div id="ntf-out"></div>
+        <div class="row">
+          <button class="btn primary">${t('set.save')}</button>
+          <button type="button" class="btn" id="ntf-cancel">${t('nt.cancel')}</button>
+        </div>
+      </form>`;
+    document.getElementById('ntf-type').addEventListener('change', (e) => render(e.target.value));
+    document.getElementById('ntf-cancel').addEventListener('click', () => { box.innerHTML = ''; });
+    document.getElementById('nt-find-chat')?.addEventListener('click', async (e) => {
+      const more = document.getElementById('ntf-chatId-more');
+      const token = document.getElementById('ntf-token').value;
+      e.target.disabled = true;
+      try {
+        const { chats } = await api('POST', '/api/notify/telegram-chats', token ? { token } : { id: ch?.id });
+        more.innerHTML = chats.length
+          ? `<div class="row" style="margin-top:8px">${chats.map((c) => `<button type="button" class="btn" data-chat="${esc(c.id)}">${esc(c.name)} · ${esc(c.id)}</button>`).join('')}</div>`
+          : `<p class="hint">${t('nt.noChats')}</p>`;
+        more.querySelectorAll('[data-chat]').forEach((b) => b.addEventListener('click', () => { document.getElementById('ntf-chatId').value = b.dataset.chat; }));
+      } catch (err) {
+        more.innerHTML = errorBox(err);
+      }
+      e.target.disabled = false;
+    });
+    document.getElementById('nt-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const payload = { type, name: document.getElementById('ntf-name').value };
+      for (const [name, kind] of NT_FIELDS[type]) {
+        const el = document.getElementById(`ntf-${name}`);
+        payload[name] = kind === 'check' ? el.checked : el.value;
+      }
+      try {
+        const data = ch
+          ? await api('PUT', `/api/notify/channels/${ch.id}`, payload)
+          : await api('POST', '/api/notify/channels', payload);
+        toast(t('set.saved'));
+        done(data);
+      } catch (err) {
+        document.getElementById('ntf-out').innerHTML = errorBox(err);
+      }
+    });
+    document.getElementById('ntf-name').focus();
+  };
+  render(type0);
+  box.scrollIntoView({ block: 'nearest' });
 }
 
 /** While the server restarts: a notice that stays until the panel answers again. */

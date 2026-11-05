@@ -178,6 +178,7 @@ export function createVpn({ db, stacks, stacksDir, domains }) {
   const baseDir = path.join(stacksDir, '.stackmoor', 'vpn');
   const image = process.env.STACKMOOR_VPN_IMAGE || vpnImageFor();
   const container = (name) => `${PREFIX}${name}`;
+  const hooks = {}; // onState(name, 'up' | 'down') – for notifications
   const dirOf = (name) => path.join(baseDir, name);
 
   const writeFile = (file, content, mode = 0o644) => {
@@ -338,6 +339,10 @@ export function createVpn({ db, stacks, stacksDir, domains }) {
     if (state === 'connecting' && prev?.state === 'down') state = 'down'; // stays down until a handshake
     const s = { state, handshake, checkedAt: now, since: state === 'down' && prev?.state === 'down' ? prev.since : since };
     status.set(name, s);
+    // Only real changes: up → down and down → up (not the first look, not "connecting").
+    if (prev && prev.state !== state && (state === 'down' || (state === 'up' && prev.state === 'down'))) {
+      try { hooks.onState?.(name, state); } catch { /* a listener must not break the check */ }
+    }
     return s;
   }
 
@@ -495,6 +500,6 @@ export function createVpn({ db, stacks, stacksDir, domains }) {
   return {
     syncImages, startAll,
     list, add, replaceConf, remove, restart, setStack, servicesFor, stackState, beforeUp, afterUp, forgetStack,
-    startMonitor, checkAll, check, attachments, image,
+    startMonitor, checkAll, check, attachments, image, hooks,
   };
 }

@@ -94,7 +94,7 @@ const fromRow = (r) => ({
   insecure: Boolean(r.insecure), hostHeader: Boolean(r.host_header), monitor: Boolean(r.monitor),
 });
 
-export function createProxies({ db, getSettings, reloadConfig, check = checkTarget }) {
+export function createProxies({ db, getSettings, reloadConfig, check = checkTarget, onChange = () => {} }) {
   const status = new Map(); // id -> { ok, ms, since, checkedAt, error }
 
   function all() {
@@ -151,6 +151,7 @@ export function createProxies({ db, getSettings, reloadConfig, check = checkTarg
     // Only changes go to the dashboard's events (and not the very first check).
     if (prev && prev.ok !== r.ok) {
       setState(db, 'proxy.events', [{ at: now, name: p.name, ok: r.ok }, ...events()].slice(0, MAX_EVENTS));
+      try { onChange(p, r); } catch { /* a listener must not break the check */ }
     }
     return status.get(p.id);
   }

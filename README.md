@@ -32,6 +32,7 @@ Run the same command again to update. Optional settings: `curl ... | sudo PORT=8
 - deleting a stack moves its folder to `.trash/` – nothing is lost by accident
 - automatic stack updates on chosen days (off by default): backup first, back to the previous images if the new ones don't start
 - restart the server from the panel or on a schedule; stacks that were running start again – also those without `restart:`
+- notifications by e-mail, Telegram, ntfy, Pushover or webhook – e.g. when a backup fails, a stack stops or the VPN goes down
 - English and Polish interface
 
 ## Automatic volumes
@@ -103,7 +104,7 @@ What goes through the tunnel follows `AllowedIPs` in your file. **Kill switch is
 - [x] New look: top menu, dashboard, status bar, light and dark theme
 - [x] Proxy: addresses in your domain for other servers (Proxmox, routers, NAS), with a health check
 - [x] Automatic stack updates (off by default) with a backup first and rollback when the new version doesn't start; server restart from the panel and on a schedule; automatic system patches (Debian/Ubuntu)
-- [ ] Notifications (e-mail, Telegram, ntfy, Pushover, webhooks)
+- [x] Notifications (e-mail, Telegram, ntfy, Pushover, webhooks): failed backups, a stack that stopped, VPN or proxy down, automatic updates, restarts
 - [ ] Pangolin – public addresses next to the local domain
 - [ ] Unraid Community Apps template
 

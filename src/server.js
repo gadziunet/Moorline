@@ -20,9 +20,10 @@ import { createPanelLock } from './panel-lock.js';
 import { createBackups } from './backups.js';
 import { createVpn } from './vpn.js';
 import { buildOverview } from './overview.js';
-import { createProxies, checkTarget, cleanProxy } from './proxies.js';
+import { createProxies, checkTarget, cleanProxy, targetUrl } from './proxies.js';
 import { createAutoUpdate } from './autoupdate.js';
 import { createSystem } from './system.js';
+import { createNotifier, createStackWatch, telegramChats, EVENTS, TYPES } from './notify.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -43,11 +44,13 @@ if (!stacksDirOk) {
   console.warn(`WARNING: ${config.stacksDir} is not mounted from the host – mount it at the same path and set STACKS_DIR.`);
 }
 const stacks = createStacks({ db, stacksDir: config.stacksDir, getSettings: () => getSettings(db) });
-const updates = createUpdates({ db, stacks, getSettings: () => getSettings(db) });
+const updates = createUpdates({ db, stacks, getSettings: () => getSettings(db), onChecked: (st) => notifyUpdates(st) });
 updates.afterStart();
 updates.startScheduler();
 // Language for things that run on their own (scheduled backups): the one the admin last used.
 let lastLang = getState(db, 'ui.lang', 'en');
+const notifier = createNotifier({ db, getT: () => (key, vars) => translate(lastLang, key, vars) });
+const notify = notifier.emit;
 const backups = createBackups({ db, stacks, stacksDir: config.stacksDir, dataDir: config.dataDir, sqlite: db });
 backups.startScheduler(() => (key, vars) => translate(lastLang, key, vars));
 const domains = createDomains({
@@ -60,13 +63,51 @@ domains.vpn.servicesFor = vpn.servicesFor;
 stacks.hooks.beforeUp = vpn.beforeUp;
 stacks.hooks.afterUp = vpn.afterUp;
 vpn.syncImages().catch(() => {}).finally(() => vpn.startMonitor());
-const proxies = createProxies({ db, getSettings: () => getSettings(db), reloadConfig: () => domains.reloadConfig() });
+const proxies = createProxies({
+  db, getSettings: () => getSettings(db), reloadConfig: () => domains.reloadConfig(),
+  onChange: (p, r) => notify('proxy', { name: p.name, target: targetUrl(p), error: r.error || '' },
+    { variant: r.ok ? 'up' : 'down', level: r.ok ? 'ok' : 'warn', subject: p.name }),
+});
 proxies.startMonitor();
 const getT = () => (key, vars) => translate(lastLang, key, vars);
 const settingsApi = { getSettings: () => getSettings(db), saveSettings: (patch) => saveSettings(db, patch) };
-const autoUpdate = createAutoUpdate({ db, stacks, updates, backups, ...settingsApi, getT, isRebooting: () => system.isRebooting() });
+const autoUpdate = createAutoUpdate({
+  db, stacks, updates, backups, ...settingsApi, getT, isRebooting: () => system.isRebooting(),
+  onResult: (r) => (r.result === 'updated'
+    ? notify('autoUpdated', { stack: r.stack, images: (r.images || []).join(', ') }, { level: 'ok', subject: r.stack })
+    : notify('autoProblem', { stack: r.stack, reason: r.reason || '' }, { variant: r.result, level: 'error', subject: r.stack })),
+});
 autoUpdate.startScheduler();
-const system = createSystem({ db, stacks, updates, backups, autoUpdate, ...settingsApi, getT });
+const system = createSystem({
+  db, stacks, updates, backups, autoUpdate, ...settingsApi, getT,
+  onBooted: ({ started }) => notify('booted', { count: started.length, stacks: started.join(', ') || '—' }),
+  onRebootRequired: ({ packages }) => notify('rebootRequired', { packages: packages.join(', ') || '—' }, { level: 'warn' }),
+});
+// Notifications for things that happen on their own.
+backups.hooks.afterJob = (e) => {
+  if (String(e.kind).startsWith('restore')) return; // restores run while the user watches
+  if (!e.ok) {
+    const error = e.error || (Array.isArray(e.failed) ? e.failed.join(', ') : '');
+    notify('backupFailed', { stack: e.stack || '', error }, { variant: e.kind === 'verify' ? 'verify' : e.stack ? 'stack' : 'all', level: 'error', subject: `${e.kind}.${e.stack}` });
+  } else if (e.kind === 'scheduled') {
+    notify('backupOk', { count: Array.isArray(e.stacks) ? e.stacks.length : e.stacks ?? '' }, { level: 'ok' });
+  }
+};
+vpn.hooks.onState = (name, state) => notify('vpn', { name }, { variant: state, level: state === 'down' ? 'error' : 'ok', subject: name });
+createStackWatch({ stacks, emit: notify, isQuiet: () => system.isRebooting() || autoUpdate.busy() }).start();
+
+/** After an update check: a new panel version, or stacks that got new images. Each only once. */
+function notifyUpdates(st) {
+  const p = st.panel;
+  if (p?.updateAvailable && p.latest && getState(db, 'notify.panelSeen') !== p.latest) {
+    setState(db, 'notify.panelSeen', p.latest);
+    notify('panelUpdate', { version: p.latest }, { subject: p.latest });
+  }
+  const seen = getState(db, 'notify.stacksSeen', []);
+  const fresh = (st.stacksWithUpdates || []).filter((n) => !seen.includes(n));
+  setState(db, 'notify.stacksSeen', st.stacksWithUpdates || []);
+  if (fresh.length) notify('stackUpdates', { stacks: fresh.join(', ') }, { subject: fresh.join(',') });
+}
 system.startMonitor();
 
 // Changes with every start – the page uses it to notice that the panel restarted.
@@ -402,6 +443,24 @@ app.post('/api/system/reboot', wrap(async (_req, res) => res.json(await system.r
 app.put('/api/system/schedule', (req, res) => res.json(system.saveSchedule(req.body || {})));
 app.put('/api/system/auto-reboot', wrap(async (req, res) => res.json(await system.setAutoReboot(req.body || {}))));
 app.post('/api/system/patches', streamJob((req, write) => system.setPatches(Boolean(req.body?.enabled), write, req.t)));
+
+// ---------- notifications ----------
+
+const notifyState = () => ({
+  channels: notifier.channels(), prefs: notifier.prefs(), history: notifier.history(),
+  types: Object.keys(TYPES), events: Object.keys(EVENTS),
+});
+app.get('/api/notify', (_req, res) => res.json(notifyState()));
+app.post('/api/notify/channels', (req, res) => { notifier.saveChannel(req.body || {}); res.json(notifyState()); });
+app.put('/api/notify/channels/:id', (req, res) => { notifier.saveChannel(req.body || {}, req.params.id); res.json(notifyState()); });
+app.delete('/api/notify/channels/:id', (req, res) => { notifier.removeChannel(req.params.id); res.json(notifyState()); });
+app.post('/api/notify/channels/:id/test', wrap(async (req, res) => { await notifier.test(req.params.id, req.t); res.json(notifyState()); }));
+app.put('/api/notify/prefs', (req, res) => { notifier.savePrefs(req.body || {}); res.json(notifyState()); });
+app.post('/api/notify/telegram-chats', wrap(async (req, res) => {
+  // A saved channel's token can be used without sending it again.
+  const token = req.body?.id ? notifier.secret(req.body.id, 'token') : req.body?.token;
+  res.json({ chats: await telegramChats(token) });
+}));
 
 app.get('/api/stacks/:name/vpn', wrap(async (req, res) => {
   stacks.assertName(req.params.name);

@@ -231,10 +231,14 @@ export function createBackups({ db, stacks, stacksDir, dataDir, sqlite }) {
       const started = Date.now();
       try {
         const result = await fn(log);
-        addHistory({ at: current.startedAt, kind, stack, ok: !result?.failed?.length, durationMs: Date.now() - started, ...result });
+        const entry = { at: current.startedAt, kind, stack, ok: !result?.failed?.length, durationMs: Date.now() - started, ...result };
+        addHistory(entry);
+        try { hooks.afterJob?.(entry); } catch { /* notifications must not change the result */ }
         return result;
       } catch (err) {
-        addHistory({ at: current.startedAt, kind, stack, ok: false, durationMs: Date.now() - started, error: err.key ? t(err.key, err.vars) : err.message });
+        const entry = { at: current.startedAt, kind, stack, ok: false, durationMs: Date.now() - started, error: err.key ? t(err.key, err.vars) : err.message };
+        addHistory(entry);
+        try { hooks.afterJob?.(entry); } catch { /* notifications must not change the result */ }
         throw err;
       } finally {
         // Refresh the saved list of snapshots before the job counts as finished,

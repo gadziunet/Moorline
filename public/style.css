@@ -474,3 +474,12 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 14px; }
 /* Automatic updates: the stacks to update */
 .au-list { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 4px 0 6px; }
 .card h3 { margin: 0 0 10px; font-size: 14px; }
+
+/* Notifications: channels */
+.nt-list { display: flex; flex-direction: column; border-top: 1px solid var(--line); margin-top: 4px; }
+.nt-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.nt-row.off .nt-name { opacity: .55; }
+.nt-name { display: flex; flex-direction: column; min-width: 0; flex: 1 1 200px; }
+.nt-name .hint { overflow-wrap: anywhere; font-size: 13px; }
+.nt-actions { gap: 6px; }
+.nt-form { border: 1px solid var(--text); padding: 16px; margin: 0 0 16px; }

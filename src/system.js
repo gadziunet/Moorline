@@ -78,7 +78,7 @@ export function autoRebootConfig(enabled, time) {
     + `Unattended-Upgrade::Automatic-Reboot-Time "${time}";\n`;
 }
 
-export function createSystem({ db, stacks, updates, backups, autoUpdate, getSettings, saveSettings, getT, readBoot = readBootId, pause = sleep }) {
+export function createSystem({ db, stacks, updates, backups, autoUpdate, getSettings, saveSettings, getT, readBoot = readBootId, pause = sleep, onBooted = () => {}, onRebootRequired = () => {} }) {
   let cache = null;
   let snapshotTimer = null;
 
@@ -155,9 +155,24 @@ export function createSystem({ db, stacks, updates, backups, autoUpdate, getSett
     return started;
   }
 
+  /** Once per boot: tell when the system needs a restart (e.g. after a kernel patch). */
+  async function checkRebootRequired() {
+    const bootId = readBoot();
+    if (!bootId || getState(db, 'system.rebootNotified') === bootId) return false;
+    const i = await info({ fresh: true });
+    if (!i.host?.rebootRequired) return false;
+    setState(db, 'system.rebootNotified', bootId);
+    onRebootRequired({ packages: i.host.packages });
+    return true;
+  }
+
   function startMonitor() {
     docker(['rm', '-f', HELPER]).catch(() => {}); // left from the restart before this boot
-    afterBoot().catch(() => {}).finally(() => {
+    const saved = getState(db, 'system.running');
+    const rebooted = Boolean(saved?.bootId && readBoot() && saved.bootId !== readBoot());
+    setTimeout(() => checkRebootRequired().catch(() => {}), 10 * 60e3).unref?.();
+    setInterval(() => checkRebootRequired().catch(() => {}), 6 * 3600e3).unref?.();
+    afterBoot().then((started) => { if (rebooted) onBooted({ started }); }).catch(() => {}).finally(() => {
       saveRunning().catch(() => {});
       clearInterval(snapshotTimer);
       snapshotTimer = setInterval(() => saveRunning().catch(() => {}), 5 * 60e3);
@@ -258,5 +273,5 @@ export function createSystem({ db, stacks, updates, backups, autoUpdate, getSett
     return info({ fresh: true });
   }
 
-  return { info, reboot, saveSchedule, setPatches, setAutoReboot, startMonitor, afterBoot, saveRunning, isRebooting: () => rebooting };
+  return { info, reboot, saveSchedule, setPatches, setAutoReboot, startMonitor, afterBoot, saveRunning, checkRebootRequired, isRebooting: () => rebooting };
 }

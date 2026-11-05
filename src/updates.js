@@ -37,7 +37,7 @@ async function imageHasUpdate(image) {
   return !local.includes(remote);
 }
 
-export function createUpdates({ db, stacks, getSettings }) {
+export function createUpdates({ db, stacks, getSettings, onChecked = () => {} }) {
   let running = null;
 
   // ---------- the panel itself ----------
@@ -139,6 +139,7 @@ export function createUpdates({ db, stacks, getSettings }) {
         await checkPanel();
         if (settings.updateCheckStacks) await checkStacks();
         setState(db, 'update.lastRun', new Date().toISOString());
+        try { onChecked(status()); } catch { /* notifications must not break the check */ }
       } finally {
         running = null;
       }

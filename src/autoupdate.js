@@ -49,7 +49,7 @@ export async function waitHealthy(inspect, { settle = 30e3, timeout = 180e3, eve
   }
 }
 
-export function createAutoUpdate({ db, stacks, updates, backups, getSettings, saveSettings, getT, run = docker, healthOpts = {}, isRebooting = () => false }) {
+export function createAutoUpdate({ db, stacks, updates, backups, getSettings, saveSettings, getT, run = docker, healthOpts = {}, isRebooting = () => false, onResult = () => {} }) {
   let running = null;
 
   const config = () => ({ ...AUTO_UPDATE_DEFAULTS, ...(getSettings().autoUpdate || {}) });
@@ -154,11 +154,12 @@ export function createAutoUpdate({ db, stacks, updates, backups, getSettings, sa
           setState(db, 'autoupdate.current', { kind, startedAt: new Date().toISOString(), stack: s.name });
           try {
             const r = await updateStack(s.name, t);
-            if (r) { addRun({ ...r, kind }); done.push(r); }
+            if (r) { addRun({ ...r, kind }); done.push(r); onResult(r); }
           } catch (err) {
             const r = { at: new Date().toISOString(), stack: s.name, result: 'failed', kind, reason: err.key ? t(err.key, err.vars) : err.message };
             addRun(r);
             done.push(r);
+            onResult(r);
           }
         }
         setState(db, 'autoupdate.last', { at: new Date().toISOString(), kind, count: done.length });
