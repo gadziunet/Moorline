@@ -308,12 +308,13 @@ app.post('/api/stacks/:name/actions/:action', wrap(async (req, res) => {
   const write = openStream(res);
   const ok = await stacks.action(req.params.name, req.params.action, write, { signal, t: req.t })
     .catch((err) => { write(req.t('log.error', { message: errorText(req, err) }) + '\n'); return false; });
+  // After updating images, refresh this stack's "update available" flag BEFORE the stream ends:
+  // the page reloads its stack list as soon as the stream closes and must see the new state.
+  if (ok && (req.params.action === 'update' || req.params.action === 'up')) {
+    await updates.checkStack(req.params.name).catch(() => {});
+  }
   write(`\n__EXIT__:${ok ? 0 : 1}\n`);
   res.end();
-  // After updating images, refresh this stack's "update available" flag in the background.
-  if (ok && (req.params.action === 'update' || req.params.action === 'up')) {
-    updates.checkStack(req.params.name).catch(() => {});
-  }
 }));
 
 // ---------- overview (dashboard and status bar) ----------

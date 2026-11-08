@@ -1587,6 +1587,9 @@ async function renderStack(name) {
     } finally {
       buttons.forEach((b) => (b.disabled = false));
       await refreshStacks();
+      // Pick up the new "update available" flags, then drop the stale update notice if this stack is current.
+      state.updates = await api('GET', '/api/updates').catch(() => state.updates);
+      if (!state.stacks.find((x) => x.name === name)?.updateAvailable) document.getElementById('stack-upd-box')?.remove();
       const s = state.stacks.find((x) => x.name === name);
       const badge = document.getElementById('badge');
       if (s && badge) {
