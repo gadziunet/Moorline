@@ -49,3 +49,12 @@ test('panel lock: off, incomplete settings or emergency switch let everything th
   assert.ok(run(make(settings, null), { ...ip, hostname: 'panel.dom.example.com' }).next);
   assert.equal(run(make(settings, null), { ...ip, hostname: '192.168.1.240' }).status, 302);
 });
+
+test('panel lock: a running server restore can still be followed by IP (the route itself needs the code)', () => {
+  const lock = make();
+  const ip = { socket: { remoteAddress: '192.168.1.10' } };
+  assert.ok(run(lock, { ...ip, path: '/api/setup/restore/status' }).next);
+  // only reading the status – nothing else of the setup wizard
+  assert.equal(run(lock, { ...ip, path: '/api/setup/restore/start', method: 'POST' }).status, 421);
+  assert.equal(run(lock, { ...ip, path: '/api/setup', method: 'POST' }).status, 421);
+});

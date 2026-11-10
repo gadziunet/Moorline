@@ -22,6 +22,8 @@ export function createPanelLock({ getSettings, domains, env = process.env }) {
     if (viaCaddy || remote === '127.0.0.1' || remote === '::1') return next();
     // Health checks (install.sh, monitoring) may still ask whether the panel is up.
     if (req.method === 'GET' && req.path === '/api/state') return next();
+    // A server restore may switch the lock on halfway; its progress (code or login needed) stays readable.
+    if (req.method === 'GET' && req.path === '/api/setup/restore/status') return next();
     const url = domains.panelUrl();
     if (req.path.startsWith('/api/')) {
       return res.status(421).json({ error: req.t('dns.useDomain', { url }), redirect: url });

@@ -240,6 +240,10 @@ else
 fi
 echo
 echo "  Open:   http://${IP}:${PORT}"
+# First run only: the code the panel asks for before the account can be created.
+if SETUP_CODE="$(docker exec stackmoor node src/cli.js setup-code 2>/dev/null)" && [ -n "$SETUP_CODE" ]; then
+  echo "  Code:   ${SETUP_CODE}   (asked when you create the account; also in: docker logs stackmoor)"
+fi
 echo "  Logs:   docker logs -f stackmoor"
 echo "  Update: run this installer again"
 [ "${BOOT_OK:-1}" = 1 ] && echo "  Boot:   Docker, the panel and your stacks start with the system"

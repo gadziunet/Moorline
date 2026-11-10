@@ -58,10 +58,20 @@ function toast(msg) {
   toast.timer = setTimeout(() => el.classList.remove('show'), 2600);
 }
 
+// One-time setup code (first run only), kept for this tab while the account is created or restored.
+const SETUP_CODE_KEY = 'sm-setup-code';
+const setupCode = {
+  get() { try { return sessionStorage.getItem(SETUP_CODE_KEY) || ''; } catch { return ''; } },
+  // Only letters and digits: anything else (a typo like "ą", a pasted "–") would break every request header.
+  set(v) { try { sessionStorage.setItem(SETUP_CODE_KEY, String(v).toUpperCase().replace(/[^A-Z0-9]/g, '')); } catch { /* ignore */ } },
+  clear() { try { sessionStorage.removeItem(SETUP_CODE_KEY); } catch { /* ignore */ } },
+};
+
 const headers = (json) => ({
   ...(json ? { 'Content-Type': 'application/json' } : {}),
   'X-Requested-With': 'stackmoor',
   'X-Lang': lang,
+  ...(setupCode.get() ? { 'X-Setup-Code': setupCode.get() } : {}),
 });
 
 async function api(method, url, body) {
@@ -77,7 +87,11 @@ async function api(method, url, body) {
   }
   // The panel was locked to its domain while this tab used the IP address.
   if (res.status === 421 && data.redirect) location.href = data.redirect + location.hash;
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  if (!res.ok) {
+    const err = new Error(data.error || `HTTP ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
   return data;
 }
 
@@ -187,6 +201,9 @@ function renderAuth() {
       </div>
       <h1>${t(setup ? 'auth.welcome' : 'auth.login')}</h1>
       <p>${t(setup ? 'auth.setupLead' : 'auth.loginLead')}</p>
+      ${setup ? `<div class="field"><label for="sc">${t('auth.setupCode')}</label>
+        <input type="text" id="sc" autocomplete="off" autocapitalize="characters" spellcheck="false" required placeholder="XXXX-XXXX-XXXX" value="${esc(setupCode.get())}">
+        <p class="hint">${t('auth.setupCodeHint')}</p></div>` : ''}
       <div class="field"><label for="u">${t('auth.username')}</label>
         <input type="text" id="u" autocomplete="username" autocapitalize="off" required value="${setup ? 'admin' : ''}"></div>
       <div class="field"><label for="p">${t('auth.password')}</label>
@@ -198,12 +215,24 @@ function renderAuth() {
         <button type="button" class="btn" id="wiz-open" style="width:100%">${t('wiz.restoreBtn')}</button>` : ''}
     </form></div>`;
   bindLangSelect('auth-lang');
-  document.getElementById('wiz-open')?.addEventListener('click', () => { state.wizard = 'restore'; render(); });
+  if (state.authError) {
+    document.getElementById('err').innerHTML = errorBox(new Error(state.authError));
+    state.authError = null;
+  }
+  const codeInput = document.getElementById('sc');
+  document.getElementById('wiz-open')?.addEventListener('click', () => {
+    if (!codeInput.reportValidity()) return;
+    setupCode.set(codeInput.value);
+    state.wizard = 'restore';
+    render();
+  });
   document.getElementById('auth').addEventListener('submit', async (e) => {
     e.preventDefault();
     const body = { username: document.getElementById('u').value, password: document.getElementById('p').value };
+    if (codeInput) setupCode.set(codeInput.value);
     try {
       await api('POST', setup ? '/api/setup' : '/api/login', body);
+      setupCode.clear();
       if (setup) state.afterSetup = true; // next: how to open the panel (IP or domain)
       await boot();
     } catch (err) {
@@ -312,6 +341,7 @@ async function renderRestoreWizard() {
     opts = await api('GET', '/api/setup/restore/options');
   } catch (err) {
     state.wizard = null;
+    state.authError = err.message;
     return render();
   }
   const dests = opts.destinations;
@@ -433,14 +463,31 @@ function renderRestoreProgress() {
       <div id="wz-done"></div>
     </div></div>`;
   const pre = document.getElementById('wz-log');
+  // Drawn again (e.g. after a hash change): only the newest view keeps polling.
+  const gen = (renderRestoreProgress.gen = (renderRestoreProgress.gen || 0) + 1);
+  const live = () => state.wizard === 'progress' && gen === renderRestoreProgress.gen;
+  const toLogin = async () => {
+    if (!live()) return;
+    setupCode.clear();
+    state.wizard = null;
+    await boot();
+  };
   const tick = async () => {
-    if (state.wizard !== 'progress') return;
+    if (!live()) return;
     let st;
     try {
       st = await api('GET', '/api/setup/restore/status');
-    } catch {
+    } catch (err) {
+      // No restore to follow (the panel restarted) or the account is already back: log in.
+      if (err.status === 404) return toLogin();
+      if (err.status === 403) {
+        const s = await api('GET', '/api/state').catch(() => null);
+        return s && !s.needsSetup && !s.restoring ? toLogin() : askCode();
+      }
       return setTimeout(tick, 3000);
     }
+    if (!live()) return;
+    document.getElementById('wz-done').innerHTML = '';
     const atBottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 40;
     pre.textContent = st.log || '';
     if (atBottom) pre.scrollTop = pre.scrollHeight;
@@ -459,11 +506,30 @@ function renderRestoreProgress() {
       : st.failed.length
         ? `<div class="notice warn">${esc(t('wiz.doneFailed', { list: st.failed.join(', ') }))}</div>`
         : `<div class="notice info">${t('wiz.done')}</div>`;
+    // All went well: nothing left to read, go to the login page by itself.
+    if (!st.error && !st.failed.length) {
+      document.getElementById('wz-done').innerHTML = `${msg}<p class="hint">${t('wiz.redirecting')}</p>`;
+      setTimeout(toLogin, 3000);
+      return;
+    }
     document.getElementById('wz-done').innerHTML = `${msg}
       <button class="btn primary" id="wz-login" style="width:100%">${t(st.error ? 'wiz.back' : 'wiz.login')}</button>`;
-    document.getElementById('wz-login').addEventListener('click', async () => {
-      state.wizard = null;
-      await boot();
+    document.getElementById('wz-login').addEventListener('click', toLogin);
+  };
+  // Opened in a new window (or the code is wrong): ask for it, then keep following the restore.
+  const askCode = () => {
+    const box = document.getElementById('wz-done');
+    if (document.getElementById('wz-code')) return;
+    box.innerHTML = `<form id="wz-code-form" style="margin-top:12px">
+      <p class="hint">${t('wiz.codeAgain')}</p>
+      <div class="field"><label for="wz-code">${t('auth.setupCode')}</label>
+        <input type="text" id="wz-code" autocomplete="off" autocapitalize="characters" spellcheck="false" required placeholder="XXXX-XXXX-XXXX"></div>
+      <button class="btn primary">${t('wiz.codeContinue')}</button></form>`;
+    document.getElementById('wz-code-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      setupCode.set(document.getElementById('wz-code').value);
+      box.innerHTML = '';
+      tick();
     });
   };
   tick();

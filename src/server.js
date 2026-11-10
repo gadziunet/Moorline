@@ -25,6 +25,7 @@ import { createAutoUpdate } from './autoupdate.js';
 import { createSystem } from './system.js';
 import { createNotifier, createStackWatch, telegramChats, EVENTS, TYPES } from './notify.js';
 import { createPangolin } from './pangolin.js';
+import { createSetupToken } from './setup-token.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -147,6 +148,24 @@ app.use('/api', requireAppHeader);
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 const hasUsers = () => db.prepare('SELECT COUNT(*) AS n FROM users').get().n > 0;
+
+// Only while there is no account yet, and not while a server restore is running.
+const restoreRunning = () => Boolean(backups.serverRestoreStatus() && !backups.serverRestoreStatus().done);
+function setupOnly(req, res, next) {
+  if (hasUsers()) return fail(req, res, 409, 'setup.exists');
+  if (restoreRunning()) return fail(req, res, 409, 'backup.busy');
+  next();
+}
+
+// One-time setup code: needed to create the account or restore a server while there is none.
+const setupToken = createSetupToken({ dataDir: config.dataDir, hasUsers });
+{
+  const code = setupToken.ensure();
+  if (code) console.log(`Setup code: ${code}  (the panel asks for it when you create the account)`);
+}
+const requireSetupCode = (req, res, next) => (setupToken.check(req.get('X-Setup-Code'))
+  ? next()
+  : fail(req, res, 403, 'setup.badCode'));
 const fail = (req, res, status, key, vars) => res.status(status).json({ error: req.t(key, vars) });
 
 const translateResult = (req, r) => ({
@@ -187,14 +206,14 @@ app.get('/api/state', (req, res) => {
   });
 });
 
-app.post('/api/setup', loginRateLimit, (req, res) => {
-  if (hasUsers()) return fail(req, res, 409, 'setup.exists');
+app.post('/api/setup', loginRateLimit, setupOnly, requireSetupCode, (req, res) => {
   const username = String(req.body.username || '').trim();
   const password = req.body.password;
   if (!/^[a-zA-Z0-9._-]{3,32}$/.test(username)) return fail(req, res, 400, 'setup.badUsername');
   const pwErr = validatePassword(password);
   if (pwErr) return fail(req, res, 400, pwErr);
   const r = db.prepare('INSERT INTO users(username, password_hash) VALUES (?, ?)').run(username, hashPassword(password));
+  setupToken.clear();
   createSession(db, r.lastInsertRowid, req, res);
   res.json({ ok: true });
 });
@@ -204,6 +223,8 @@ app.post('/api/login', loginRateLimit, (req, res) => {
   if (!user || !verifyPassword(String(req.body.password || ''), user.password_hash)) {
     return fail(req, res, 401, 'login.invalid');
   }
+  // After a server restore the code is no longer needed (kept while the restore still runs).
+  if (!restoreRunning()) setupToken.clear();
   createSession(db, user.id, req, res);
   res.json({ ok: true });
 });
@@ -214,25 +235,26 @@ app.post('/api/logout', (req, res) => {
 });
 
 // ---------- setup wizard: restore a whole server from a backup ----------
-// Open only while the panel has no account yet; the status stays readable while a restore runs.
+// Open only while the panel has no account yet, and only with the setup code. The restored
+// database brings the old account back halfway through, so the status needs the code (or a login).
 
-const setupOnly = (req, res, next) => (hasUsers() ? fail(req, res, 409, 'setup.exists') : next());
 
-app.get('/api/setup/restore/options', setupOnly, (_req, res) => {
+app.get('/api/setup/restore/options', setupOnly, requireSetupCode, (_req, res) => {
   res.json({ destinations: backups.publicConfig().destinations });
 });
 
-app.post('/api/setup/restore/connect', loginRateLimit, setupOnly, wrap(async (req, res) => {
+app.post('/api/setup/restore/connect', loginRateLimit, setupOnly, requireSetupCode, wrap(async (req, res) => {
   res.json({ runs: await backups.connectExisting(req.body || {}) });
 }));
 
-app.post('/api/setup/restore/start', setupOnly, wrap(async (req, res) => {
+app.post('/api/setup/restore/start', setupOnly, requireSetupCode, wrap(async (req, res) => {
   res.status(202).json(await backups.restoreServer(String(req.body?.run || ''), req.t));
 }));
 
 app.get('/api/setup/restore/status', (req, res) => {
   const st = backups.serverRestoreStatus();
-  if (!st) return fail(req, res, 404, 'notFound');
+  if (!st) return fail(req, res, 404, 'notFound'); // e.g. the panel restarted: nothing to follow
+  if (!req.user && !setupToken.check(req.get('X-Setup-Code'))) return fail(req, res, 403, 'setup.badCode');
   res.json(st);
 });
 

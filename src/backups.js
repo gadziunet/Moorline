@@ -671,8 +671,13 @@ export function createBackups({ db, stacks, stacksDir, dataDir, sqlite }) {
     if (serverRestore && !serverRestore.done) throw new UserError('backup.busy', {}, 409);
     const r = await findRun(runId);
     if (!r || !r.system) throw new UserError('backup.noSnapshot', {}, 404);
-    serverRestore = { runId, time: r.time, total: r.stacks.length, current: 0, stack: null, phase: 'panel', done: false, failed: [], error: null };
-    const p = job('restore-server', null, t, async (log) => {
+    serverRestore = { runId, time: r.time, total: r.stacks.length, current: 0, stack: null, phase: 'panel', done: false, failed: [], error: null, log: '' };
+    const p = job('restore-server', null, t, async (jobLog) => {
+      // The wizard shows only this restore's own output, never the log of a later job.
+      const log = (s) => {
+        serverRestore.log = (serverRestore.log + s).slice(-MAX_LOG);
+        jobLog(s);
+      };
       try {
         await restoreSystem(r.system, log, t);
         serverRestore.phase = 'stacks';
@@ -718,7 +723,7 @@ export function createBackups({ db, stacks, stacksDir, dataDir, sqlite }) {
 
   function serverRestoreStatus() {
     if (!serverRestore) return null;
-    return { ...serverRestore, log: current?.kind === 'restore-server' ? current.log : lastLog };
+    return { ...serverRestore, failed: [...serverRestore.failed] };
   }
 
   // ---------- status and schedule ----------
