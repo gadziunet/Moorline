@@ -16,6 +16,7 @@ const sqlTime = (s) => (s && !s.includes('T') ? `${s.replace(' ', 'T')}Z` : s);
  * @param {object} p.domainStatus       domains.status() (may be cached)
  * @param {Array}  p.proxies            proxies.list()
  * @param {Array}  p.proxyEvents        proxy state changes (newest first)
+ * @param {string} p.serverIp           this server's address in the local network ('' when unknown)
  */
 export function buildOverview(p) {
   const addresses = {};
@@ -50,6 +51,7 @@ export function buildOverview(p) {
       ? { enabled: true, domain: ds.domain, running: ds.running, certificate: ds.certificate, panelUrl: ds.panelUrl || null }
       : { enabled: false },
     addresses,
+    serverIp: p.serverIp || null,
     backup: {
       configured: Boolean(p.backupsConfigured),
       running: Boolean(p.backupRunning),

@@ -1,5 +1,6 @@
 // Stackmoor UI – no framework, no build step.
 import { t, lang, setLang, LANGS } from './i18n.js';
+import { openTargets as buildTargets } from './links.js';
 
 const app = document.getElementById('app');
 const state = { user: null, needsSetup: false, stacks: [], refreshTimer: null, abort: null, version: '' };
@@ -1129,20 +1130,13 @@ function renderNew() {
  * otherwise the published TCP ports on the address the panel is opened from.
  */
 function openTargets(routesInfo, containers) {
-  if (routesInfo?.domain && routesInfo.routes?.length) {
-    return [...new Set(routesInfo.routes.map((r) => `https://${r.subdomain}.${routesInfo.domain}`))];
-  }
-  const host = location.hostname.includes(':') ? `[${location.hostname}]` : location.hostname;
-  const urls = [];
-  for (const c of containers || []) {
-    for (const p of c.ports || []) {
-      const m = /^(\d+)→(\d+)\/tcp$/.exec(p);
-      if (!m) continue;
-      const scheme = m[2] === '443' ? 'https' : 'http';
-      urls.push(`${scheme}://${host}:${m[1]}`);
-    }
-  }
-  return [...new Set(urls)];
+  return buildTargets({
+    domain: routesInfo?.domain,
+    routes: routesInfo?.routes,
+    containers,
+    hostname: location.hostname,
+    serverIp: state.overview?.serverIp,
+  });
 }
 
 // Close an open "Open" menu when clicking anywhere else.
@@ -1591,6 +1585,10 @@ async function renderStack(name) {
             info.routes = r.routes;
             rows = r.routes.map((x) => ({ ...x }));
             draw();
+            // The Open button and the Addresses card follow the new subdomains at once.
+            routesInfo = { ...(routesInfo || {}), domain: info.domain, routes: r.routes };
+            fillOpenButton(name, data.containers);
+            refreshOverview();
             if (r.applied) toast(t('edit.saved'));
             else document.getElementById('route-out').innerHTML = `<div class="notice error">${esc(r.log.trim().split('\n').slice(-6).join('\n'))}</div>`;
           } catch (err) {

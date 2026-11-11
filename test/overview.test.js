@@ -26,6 +26,8 @@ test('overview: addresses, last backup per stack, size of the newest run, events
   assert.equal(o.events[0].type, 'action');
   assert.equal(o.events[0].at, '2026-10-30T18:00:00Z');
   assert.equal(o.domain.certificate, true);
+  assert.equal(o.serverIp, null);
+  assert.equal(buildOverview({ serverIp: '192.168.1.10' }).serverIp, '192.168.1.10');
 });
 
 test('overview: nothing set up yet', () => {

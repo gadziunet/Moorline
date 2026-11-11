@@ -368,6 +368,7 @@ app.get('/api/overview', wrap(async (_req, res) => {
     domainStatus: await cachedDomainStatus(),
     proxies: proxies.list(),
     proxyEvents: proxies.events(),
+    serverIp: getSettings(db).serverIp || '',
   }));
 }));
 
