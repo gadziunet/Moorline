@@ -1,24 +1,36 @@
 import crypto from 'node:crypto';
+import { promisify } from 'node:util';
 
 const COOKIE = 'sm_session';
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 // --- passwords (scrypt from the standard library, no extra dependencies) ---
+// Asynchronous: hashing takes ~50 ms and must not stop the panel while it runs.
 
-export function hashPassword(password) {
+const scrypt = promisify(crypto.scrypt);
+const SCRYPT = { N: 16384, r: 8, p: 1 };
+
+export async function hashPassword(password) {
   const salt = crypto.randomBytes(16);
-  const hash = crypto.scryptSync(password, salt, 64, { N: 16384, r: 8, p: 1 });
+  const hash = await scrypt(String(password), salt, 64, SCRYPT);
   return `scrypt$${salt.toString('base64')}$${hash.toString('base64')}`;
 }
 
-export function verifyPassword(password, stored) {
+export async function verifyPassword(password, stored) {
   const [algo, saltB64, hashB64] = String(stored).split('$');
   if (algo !== 'scrypt' || !saltB64 || !hashB64) return false;
   const expected = Buffer.from(hashB64, 'base64');
-  const actual = crypto.scryptSync(password, Buffer.from(saltB64, 'base64'), expected.length, {
-    N: 16384, r: 8, p: 1,
-  });
+  const actual = await scrypt(String(password), Buffer.from(saltB64, 'base64'), expected.length, SCRYPT);
   return crypto.timingSafeEqual(expected, actual);
+}
+
+// A login with an unknown username does the same work as a real one, so the time it takes
+// does not tell whether the name exists.
+let dummyHash = null;
+export async function verifyNobody(password) {
+  dummyHash ??= await hashPassword(crypto.randomBytes(16).toString('hex'));
+  await verifyPassword(password, dummyHash);
+  return false;
 }
 
 // Returns an error translation key or null.
@@ -96,12 +108,34 @@ export function requireAppHeader(req, res, next) {
 }
 
 // Simple login rate limit: 10 attempts per 15 minutes per address.
+// The address is the real client: server.js trusts X-Forwarded-For only from Caddy.
 const attempts = new Map();
+const MAX_TRACKED = 10_000;
+function forgetOld(now = Date.now()) {
+  for (const [key, entry] of attempts) if (entry.reset < now) attempts.delete(key);
+}
+setInterval(forgetOld, 5 * 60 * 1000).unref();
+// IPv6 clients usually own a whole /64: count it as one address.
+function limitKey(ip = '') {
+  const plain = String(ip).replace(/^::ffff:/, '');
+  if (!plain.includes(':')) return plain;
+  const [head] = plain.split('::');
+  const groups = head.split(':').filter(Boolean);
+  const full = plain.includes('::') ? [...groups, '0', '0', '0', '0'].slice(0, 4) : plain.split(':').slice(0, 4);
+  return `${full.join(':')}::/64`;
+}
+
 export function loginRateLimit(req, res, next) {
-  const key = req.ip;
+  const key = limitKey(req.ip);
   const now = Date.now();
   const entry = attempts.get(key);
   if (!entry || entry.reset < now) {
+    if (attempts.size >= MAX_TRACKED) forgetOld(now);
+    // Still full: drop the oldest entries (a Map keeps insertion order), never everything at once.
+    for (const k of attempts.keys()) {
+      if (attempts.size < MAX_TRACKED) break;
+      attempts.delete(k);
+    }
     attempts.set(key, { count: 1, reset: now + 15 * 60 * 1000 });
     return next();
   }

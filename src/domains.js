@@ -12,6 +12,7 @@ import { proxyRoute } from './proxies.js';
 import { certErrors } from './caddy-logs.js';
 import { VERSION, isSemver } from './version.js';
 import { checkDomain, upsertRecord, supportsAutoRecord, isIPv4 } from './dns-records.js';
+import { isInContainer } from './mounts.js';
 
 // Local domains: one Caddy container ("stackmoor-caddy") in front of all stacks.
 // - It holds one wildcard certificate (*.domain) obtained through the DNS provider's API,
@@ -573,10 +574,18 @@ export function createDomains({ db, stacks, stacksDir, getSettings, saveSettings
   let caddyIp = null;
   // Only when the panel itself runs in a container on that network (otherwise Caddy reaches it
   // through host.docker.internal and the Host header is all we can check).
+  // A failed docker call keeps the address we know: only a removed or stopped Caddy clears it.
   async function refreshCaddyIp() {
-    if (!await selfContainer()) { caddyIp = null; return null; }
+    if (!await selfContainer()) {
+      if (!isInContainer()) caddyIp = null;
+      return caddyIp;
+    }
     const r = await docker(['inspect', '--format', `{{with index .NetworkSettings.Networks "${NETWORK}"}}{{.IPAddress}}{{end}}`, CADDY]);
-    caddyIp = r.code === 0 && r.stdout.trim() ? r.stdout.trim() : null;
+    if (r.code !== 0) {
+      if (/no such (object|container)/i.test(r.output)) caddyIp = null;
+      return caddyIp;
+    }
+    caddyIp = r.stdout.trim() || null;
     return caddyIp;
   }
 

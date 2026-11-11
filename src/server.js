@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { openDb, getSettings, saveSettings, getState, setState } from './db.js';
 import {
-  hashPassword, verifyPassword, validatePassword, createSession, destroySession,
+  hashPassword, verifyPassword, verifyNobody, validatePassword, createSession, destroySession,
   sessionMiddleware, requireAuth, requireAppHeader, loginRateLimit,
 } from './auth.js';
 import { createStacks } from './stacks.js';
@@ -119,12 +119,35 @@ system.startMonitor();
 const BOOT_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 const app = express();
 app.disable('x-powered-by');
-app.set('trust proxy', 'loopback, linklocal, uniquelocal');
+// X-Forwarded-For / -Proto only from Caddy (and this machine). From anyone else they are ignored,
+// so a client cannot pick its own address (login limit) or claim https.
+const plainIp = (ip) => String(ip || '').replace(/^::ffff:/, '');
+app.set('trust proxy', (addr) => {
+  const ip = plainIp(addr);
+  return ip === '127.0.0.1' || ip === '::1' || (Boolean(domains.caddyIp()) && ip === domains.caddyIp());
+});
+// Security headers for every answer: no framing (clickjacking), no MIME sniffing, scripts and
+// styles only from the panel itself. HSTS only when the page was opened over https.
+const CSP = [
+  "default-src 'self'", "script-src 'self'", "style-src 'self' 'unsafe-inline'", "img-src 'self' data:",
+  "connect-src 'self' https:", "font-src 'self'", "object-src 'none'", "base-uri 'self'",
+  "form-action 'self'", "frame-ancestors 'none'",
+].join('; ');
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'same-origin');
+  res.setHeader('Content-Security-Policy', CSP);
+  if (req.secure) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
+  next();
+});
 app.use(express.json({ limit: '1mb' }));
 app.use(i18nMiddleware);
 
 // ---------- panel only through its domain ----------
 domains.attachSelf().catch(() => {})
+  // Learn Caddy's address right away: the domain lock and the trusted proxy depend on it.
+  .then(() => domains.refreshCaddyIp()).catch(() => {})
   .then(() => domains.syncServerIp((key, vars) => translate(lastLang, key, vars))).catch(() => {})
   .then(() => domains.syncImage()).catch(() => {})
   // A new panel version may build Caddy's config differently (e.g. proxy redirects): rewrite it.
@@ -140,7 +163,8 @@ backups.hooks.afterServerRestore = async (log, t) => {
   await domains.apply(log, t);
 };
 const panelLock = createPanelLock({ getSettings: () => getSettings(db), domains });
-setInterval(() => { if (panelLock.lockedHost()) domains.refreshCaddyIp().catch(() => {}); }, 60_000).unref();
+// Caddy's address matters whenever there is a domain: the lock and the trusted proxy both use it.
+setInterval(() => { if (getSettings(db).domain) domains.refreshCaddyIp().catch(() => {}); }, 60_000).unref();
 app.use(panelLock.middleware);
 
 app.use(sessionMiddleware(db));
@@ -206,28 +230,31 @@ app.get('/api/state', (req, res) => {
   });
 });
 
-app.post('/api/setup', loginRateLimit, setupOnly, requireSetupCode, (req, res) => {
+app.post('/api/setup', loginRateLimit, setupOnly, requireSetupCode, wrap(async (req, res) => {
   const username = String(req.body.username || '').trim();
   const password = req.body.password;
   if (!/^[a-zA-Z0-9._-]{3,32}$/.test(username)) return fail(req, res, 400, 'setup.badUsername');
   const pwErr = validatePassword(password);
   if (pwErr) return fail(req, res, 400, pwErr);
-  const r = db.prepare('INSERT INTO users(username, password_hash) VALUES (?, ?)').run(username, hashPassword(password));
+  const hash = await hashPassword(password);
+  // Checked again after the (asynchronous) hashing: two requests at once must not make two accounts.
+  if (hasUsers()) return fail(req, res, 409, 'setup.exists');
+  const r = db.prepare('INSERT INTO users(username, password_hash) VALUES (?, ?)').run(username, hash);
   setupToken.clear();
   createSession(db, r.lastInsertRowid, req, res);
   res.json({ ok: true });
-});
+}));
 
-app.post('/api/login', loginRateLimit, (req, res) => {
+app.post('/api/login', loginRateLimit, wrap(async (req, res) => {
   const user = db.prepare('SELECT * FROM users WHERE username = ?').get(String(req.body.username || '').trim());
-  if (!user || !verifyPassword(String(req.body.password || ''), user.password_hash)) {
-    return fail(req, res, 401, 'login.invalid');
-  }
+  const password = String(req.body.password || '');
+  const ok = user ? await verifyPassword(password, user.password_hash) : await verifyNobody(password);
+  if (!ok) return fail(req, res, 401, 'login.invalid');
   // After a server restore the code is no longer needed (kept while the restore still runs).
   if (!restoreRunning()) setupToken.clear();
   createSession(db, user.id, req, res);
   res.json({ ok: true });
-});
+}));
 
 app.post('/api/logout', (req, res) => {
   destroySession(db, req, res);
@@ -265,18 +292,18 @@ app.use('/api', (req, _res, next) => {
   next();
 });
 
-app.post('/api/password', (req, res) => {
+app.post('/api/password', wrap(async (req, res) => {
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
-  if (!verifyPassword(String(req.body.current || ''), user.password_hash)) {
+  if (!await verifyPassword(String(req.body.current || ''), user.password_hash)) {
     return fail(req, res, 400, 'password.wrongCurrent');
   }
   const pwErr = validatePassword(req.body.next);
   if (pwErr) return fail(req, res, 400, pwErr);
-  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(req.body.next), user.id);
+  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(await hashPassword(req.body.next), user.id);
   db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id);
   createSession(db, user.id, req, res);
   res.json({ ok: true });
-});
+}));
 
 // ---------- settings ----------
 
