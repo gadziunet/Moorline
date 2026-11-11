@@ -20,12 +20,12 @@ test('Caddy route: https with a self-signed certificate, host name and Host head
   const r = proxyRoute({ subdomain: 'pve', scheme: 'https', host: '192.168.1.10', port: 8006, insecure: true, hostHeader: false }, 'local.example.com');
   assert.deepEqual(r.match, [{ host: ['pve.local.example.com'] }]);
   assert.equal(r.handle[0].upstreams[0].dial, '192.168.1.10:8006');
-  assert.deepEqual(r.handle[0].transport, { protocol: 'http', tls: { insecure_skip_verify: true } });
+  assert.deepEqual(r.handle[0].transport, { protocol: 'http', dial_timeout: '3s', tls: { insecure_skip_verify: true } });
   const n = proxyRoute({ subdomain: 'nas', scheme: 'https', host: 'nas.lan', port: 5001, insecure: false, hostHeader: true }, 'd.eu');
   assert.deepEqual(n.handle[0].transport.tls, { server_name: 'nas.lan' });
   assert.deepEqual(n.handle[0].headers.request.set.Host, ['{http.reverse_proxy.upstream.hostport}']);
   const plain = proxyRoute({ subdomain: 'ha', scheme: 'http', host: '10.0.0.2', port: 8123 }, 'd.eu');
-  assert.equal(plain.handle[0].transport, undefined);
+  assert.deepEqual(plain.handle[0].transport, { protocol: 'http', dial_timeout: '3s' });
 });
 
 test('redirects to the target\'s own address come back to our address (like NPM)', () => {

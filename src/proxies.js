@@ -56,14 +56,13 @@ export function proxyRoute(p, domain) {
     upstreams: [{ dial: hostPort(p) }],
     headers: { response: { replace: { Location: [locationRewrite(p)] } } },
   };
+  // A target that does not answer within a few seconds gets the "starting" page, not a spinner.
+  handler.transport = { protocol: 'http', dial_timeout: '3s' };
   if (p.scheme === 'https') {
-    handler.transport = {
-      protocol: 'http',
-      tls: {
-        ...(p.insecure ? { insecure_skip_verify: true } : {}),
-        // Certificates name the server, not our address: ask for the target's own name.
-        ...(!net.isIP(p.host) ? { server_name: p.host } : {}),
-      },
+    handler.transport.tls = {
+      ...(p.insecure ? { insecure_skip_verify: true } : {}),
+      // Certificates name the server, not our address: ask for the target's own name.
+      ...(!net.isIP(p.host) ? { server_name: p.host } : {}),
     };
   }
   // Some servers only answer to their own name or address.

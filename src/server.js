@@ -145,6 +145,10 @@ app.use(express.json({ limit: '1mb' }));
 app.use(i18nMiddleware);
 
 // ---------- panel only through its domain ----------
+// Until this chain is done (network, Caddy's image, config) Caddy may still be replaced:
+// pages waiting for a restart (panel update) reload only after it.
+let starting = true;
+setTimeout(() => { starting = false; }, 15 * 60_000).unref(); // never longer, whatever hangs
 domains.attachSelf().catch(() => {})
   // Learn Caddy's address right away: the domain lock and the trusted proxy depend on it.
   .then(() => domains.refreshCaddyIp()).catch(() => {})
@@ -152,7 +156,8 @@ domains.attachSelf().catch(() => {})
   .then(() => domains.syncImage()).catch(() => {})
   // A new panel version may build Caddy's config differently (e.g. proxy redirects): rewrite it.
   .then(() => (getSettings(db).domain ? domains.reloadConfig() : null)).catch(() => {})
-  .then(() => domains.refreshCaddyIp()).catch(() => {});
+  .then(() => domains.refreshCaddyIp()).catch(() => {})
+  .finally(() => { starting = false; });
 // Caddy follows the panel version; retry now and then in case its image was published later.
 setInterval(() => { domains.syncImage().catch(() => {}); }, 6 * 3600_000).unref();
 // After restoring a whole server: start Caddy with the restored domain settings.
@@ -225,6 +230,7 @@ app.get('/api/state', (req, res) => {
     user: req.user ? { username: req.user.username } : null,
     version: VERSION,
     bootId: BOOT_ID,
+    starting,
     ...(req.user ? { updating: updates.applying() } : {}),
     ...(req.user ? { stacksDir: config.stacksDir, stacksDirOk: stacksDirOk } : {}),
   });

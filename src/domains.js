@@ -13,6 +13,50 @@ import { certErrors } from './caddy-logs.js';
 import { VERSION, isSemver } from './version.js';
 import { checkDomain, upsertRecord, supportsAutoRecord, isIPv4 } from './dns-records.js';
 import { isInContainer } from './mounts.js';
+import { startingPage, STARTING_HEADER } from './starting-page.js';
+
+// Give up on an address that does not answer after a few seconds, so the browser gets the
+// "starting" page instead of spinning.
+export const DIAL_TIMEOUT = '3s';
+
+/** Caddy's error handling: "not reachable" (502/503/504) gets the starting page – the panel's own
+ *  text on the panel's address, a "server not answering" text on proxies (whose cause may also be a
+ *  wrong port or certificate setting), the app text everywhere else. */
+export function startingErrors(panelHost, proxyHosts = []) {
+  return {
+    routes: [{
+      match: [{ expression: '{http.error.status_code} in [502, 503, 504]' }],
+      handle: [{
+        handler: 'subroute',
+        routes: [
+          ...(panelHost ? [startingRoute('panel', [panelHost])] : []),
+          ...(proxyHosts.length ? [startingRoute('proxy', proxyHosts)] : []),
+          startingRoute('app'),
+        ],
+      }],
+      terminal: true,
+    }],
+  };
+}
+
+/** Caddy route answering "not reachable" errors (502/503/504) with the starting page. */
+function startingRoute(kind, hosts) {
+  return {
+    ...(hosts ? { match: [{ host: hosts }] } : {}),
+    handle: [{
+      handler: 'static_response',
+      status_code: 503,
+      headers: {
+        'Content-Type': ['text/html; charset=utf-8'],
+        'Cache-Control': ['no-store'],
+        'Retry-After': ['5'],
+        [STARTING_HEADER]: ['1'],
+      },
+      body: startingPage(kind),
+    }],
+    terminal: true,
+  };
+}
 
 // Local domains: one Caddy container ("stackmoor-caddy") in front of all stacks.
 // - It holds one wildcard certificate (*.domain) obtained through the DNS provider's API,
@@ -444,7 +488,11 @@ export function createDomains({ db, stacks, stacksDir, getSettings, saveSettings
               routes: [
                 ...hostRoutes.map((r) => ({
                   match: [{ host: [r.host] }],
-                  handle: [{ handler: 'reverse_proxy', upstreams: [{ dial: r.dial }] }],
+                  handle: [{
+                    handler: 'reverse_proxy',
+                    upstreams: [{ dial: r.dial }],
+                    transport: { protocol: 'http', dial_timeout: DIAL_TIMEOUT },
+                  }],
                   terminal: true,
                 })),
                 // Servers outside Stackmoor (Proxmox, a router…).
@@ -456,6 +504,12 @@ export function createDomains({ db, stacks, stacksDir, getSettings, saveSettings
                   terminal: true,
                 }] : []),
               ],
+              // Caddy could not reach the panel or an app (starting, restarting, stopped): a page
+              // that waits and reloads by itself instead of an empty error or a spinning browser.
+              errors: startingErrors(
+                s.panelSubdomain ? `${s.panelSubdomain}.${s.domain}` : null,
+                proxyRows().map((x) => `${x.subdomain}.${s.domain}`),
+              ),
             },
           },
         },
@@ -600,7 +654,7 @@ export function createDomains({ db, stacks, stacksDir, getSettings, saveSettings
     const local = () => docker(['image', 'inspect', '--format', '{{.Id}}', image]);
     let want = await local();
     if (followsTag || want.code !== 0) {
-      const pull = await docker(['pull', '--quiet', image]);
+      const pull = await docker(['pull', '--quiet', image], { signal: AbortSignal.timeout(10 * 60_000) });
       if (pull.code !== 0 && want.code !== 0) {
         setState(db, 'caddy.image', { image, ok: false, at: new Date().toISOString() });
         return { changed: false, error: 'pull' };
@@ -612,6 +666,13 @@ export function createDomains({ db, stacks, stacksDir, getSettings, saveSettings
       setState(db, 'caddy.image', { image, ok: true, at: new Date().toISOString() });
       return { changed: false };
     }
+    // Every panel release builds its own Caddy image, usually with the very same Caddy inside.
+    // Replacing the container takes the domain offline for a moment, so do it only when Caddy or
+    // one of its modules really changed. The new image is used the next time Caddy is recreated.
+    if (cur.code === 0 && sameCompose(s) && await sameCaddy(image)) {
+      setState(db, 'caddy.image', { image, ok: true, same: true, at: new Date().toISOString() });
+      return { changed: false, same: true };
+    }
     // Certificates live in ./data, so recreating the container keeps them.
     writeFile(path.join(caddyDir, 'compose.yaml'), stringify(caddyCompose(s)));
     const up = await docker([...composeArgs(), 'up', '-d', '--remove-orphans']);
@@ -619,6 +680,27 @@ export function createDomains({ db, stacks, stacksDir, getSettings, saveSettings
     if (up.code !== 0) return { changed: false, error: 'up' };
     await refreshCaddyIp();
     return { changed: true };
+  }
+
+  /** Is the same Caddy inside? `caddy build-info` lists Caddy, the Go version and every module and
+   *  dependency, so a rebuild for a Go or library security fix counts as different. */
+  async function sameCaddy(img) {
+    const running = await docker(['exec', CADDY, 'caddy', 'build-info']);
+    const wanted = await docker(['run', '--rm', '--network', 'none', '--log-driver', 'none', '--entrypoint', 'caddy', img, 'build-info']);
+    const a = running.code === 0 ? running.stdout.trim() : '';
+    const b = wanted.code === 0 ? wanted.stdout.trim() : '';
+    return Boolean(a) && a === b;
+  }
+
+  /** Would this panel version write the same compose.yaml for Caddy (apart from the image)? */
+  function sameCompose(s) {
+    const noImage = (text) => String(text).replace(/^\s*image:.*$/m, '');
+    try {
+      const onDisk = fs.readFileSync(path.join(caddyDir, 'compose.yaml'), 'utf8');
+      return noImage(onDisk) === noImage(stringify(caddyCompose(s)));
+    } catch {
+      return false;
+    }
   }
 
   /** Is Caddy running, is there a certificate, and the latest certificate errors. */

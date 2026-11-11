@@ -2592,8 +2592,12 @@ function waitForRestart(beforeReload, fallbackMs = RESTART_FALLBACK_MS) {
   restartTimer = setInterval(async () => {
     let st = null;
     try { st = await fetch('/api/state', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)); } catch { /* panel is down */ }
-    // Reload only when the panel answers – never onto an error page while it is down.
-    if (st && (st.bootId !== before || Date.now() - started >= fallbackMs)) {
+    // Reload only when the panel answers and has finished starting (Caddy may still be replaced
+    // until then) – never onto an error page while it is down. Connection errors in between
+    // (Caddy restarting) are simply waited out.
+    const waited = Date.now() - started;
+    const ready = st && !st.starting;
+    if (st && ((ready && (st.bootId !== before || waited >= fallbackMs)) || waited >= fallbackMs * 6)) {
       clearInterval(restartTimer);
       try { sessionStorage.setItem(JUST_UPDATED_KEY, '1'); } catch { /* ignore */ }
       beforeReload?.();

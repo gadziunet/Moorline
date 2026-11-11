@@ -62,3 +62,30 @@ test('Caddy image follows the panel version', async () => {
   assert.equal(caddyImageFor('0.6.0', false), 'ghcr.io/gadziunet/stackmoor-caddy:latest');
   assert.equal(DEFAULT_PANEL_SUBDOMAIN, 'my');
 });
+
+test('starting page: Caddy answers "not reachable" with a page that reloads by itself', async () => {
+  const { startingErrors, DIAL_TIMEOUT } = await import('../src/domains.js');
+  const e = startingErrors('my.example.com');
+  assert.equal(DIAL_TIMEOUT, '3s');
+  assert.match(e.routes[0].match[0].expression, /502, 503, 504/);
+  const [panel, app] = e.routes[0].handle[0].routes;
+  assert.deepEqual(panel.match, [{ host: ['my.example.com'] }]);
+  assert.equal(app.match, undefined); // every other address
+  for (const r of [panel, app]) {
+    const h = r.handle[0];
+    assert.equal(h.status_code, 503);
+    assert.deepEqual(h.headers['Retry-After'], ['5']);
+    assert.match(h.body, /Sprawdzam co 5 s/);
+  }
+  assert.match(panel.handle[0].body, /Stackmoor się uruchamia/);
+  assert.match(app.handle[0].body, /Aplikacja się uruchamia/);
+  // Without a panel address only the app page is left.
+  assert.equal(startingErrors(null).routes[0].handle[0].routes.length, 1);
+  // Proxies get their own text; every answer carries the marker the page looks for.
+  const withProxy = startingErrors('my.example.com', ['nas.example.com']).routes[0].handle[0].routes;
+  assert.deepEqual(withProxy[1].match, [{ host: ['nas.example.com'] }]);
+  assert.match(withProxy[1].handle[0].body, /Serwer nie odpowiada/);
+  for (const r of withProxy) assert.deepEqual(r.handle[0].headers['X-Stackmoor-Starting'], ['1']);
+  assert.match(panel.handle[0].body, /redirect: 'manual'/);
+  assert.match(panel.handle[0].body, /location\.replace\(location\.href\)/);
+});
