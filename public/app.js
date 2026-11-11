@@ -204,7 +204,8 @@ function renderAuth() {
       <p>${t(setup ? 'auth.setupLead' : 'auth.loginLead')}</p>
       ${setup ? `<div class="field"><label for="sc">${t('auth.setupCode')}</label>
         <input type="text" id="sc" autocomplete="off" autocapitalize="characters" spellcheck="false" required placeholder="XXXX-XXXX-XXXX" value="${esc(setupCode.get())}">
-        <p class="hint">${t('auth.setupCodeHint')}</p></div>` : ''}
+        <p class="hint">${t('auth.setupCodeHint')}</p>
+        <code class="cmd">docker logs stackmoor | grep "Setup code"</code></div>` : ''}
       <div class="field"><label for="u">${t('auth.username')}</label>
         <input type="text" id="u" autocomplete="username" autocapitalize="off" required value="${setup ? 'admin' : ''}"></div>
       <div class="field"><label for="p">${t('auth.password')}</label>
@@ -219,6 +220,12 @@ function renderAuth() {
   if (state.authError) {
     document.getElementById('err').innerHTML = errorBox(new Error(state.authError));
     state.authError = null;
+  }
+  if (state.authDomain) {
+    const url = state.authDomain;
+    document.getElementById('err').innerHTML = `<div class="notice info">${esc(t('auth.domainLater'))}
+      <a href="${esc(url)}">${esc(url.replace(/^https:\/\//, ''))} ↗</a></div>`;
+    state.authDomain = null;
   }
   const codeInput = document.getElementById('sc');
   document.getElementById('wiz-open')?.addEventListener('click', () => {
@@ -507,15 +514,43 @@ function renderRestoreProgress() {
       : st.failed.length
         ? `<div class="notice warn">${esc(t('wiz.doneFailed', { list: st.failed.join(', ') }))}</div>`
         : `<div class="notice info">${t('wiz.done')}</div>`;
-    // All went well: nothing left to read, go to the login page by itself.
+    // All went well: nothing left to read, go to the login page by itself –
+    // under the panel's domain when the backup had one and its certificate is ready.
     if (!st.error && !st.failed.length) {
-      document.getElementById('wz-done').innerHTML = `${msg}<p class="hint">${t('wiz.redirecting')}</p>`;
-      setTimeout(toLogin, 3000);
+      const url = st.panelUrl && st.panelUrl !== location.origin ? st.panelUrl : null;
+      if (!url) {
+        document.getElementById('wz-done').innerHTML = `${msg}<p class="hint">${t('wiz.redirecting')}</p>`;
+        setTimeout(toLogin, 3000);
+        return;
+      }
+      document.getElementById('wz-done').innerHTML = `${msg}
+        <p class="hint">${t('wiz.waitDomain')} <a href="${esc(url)}">${esc(url.replace(/^https:\/\//, ''))} ↗</a></p>
+        <button class="btn" id="wz-here" style="width:100%">${t('wiz.loginHere')}</button>`;
+      document.getElementById('wz-here').addEventListener('click', toLogin);
+      waitForDomain(url);
       return;
     }
     document.getElementById('wz-done').innerHTML = `${msg}
       <button class="btn primary" id="wz-login" style="width:100%">${t(st.error ? 'wiz.back' : 'wiz.login')}</button>`;
     document.getElementById('wz-login').addEventListener('click', toLogin);
+  };
+  // Caddy asks for the certificate only now: try the domain every few seconds for 2 minutes.
+  // A no-cors request fails on a missing or invalid certificate and succeeds once it works.
+  const waitForDomain = async (url) => {
+    const until = Date.now() + 120_000;
+    while (live() && Date.now() < until) {
+      try {
+        await fetch(`${url}/api/state`, { mode: 'no-cors', cache: 'no-store', signal: AbortSignal.timeout(5000) });
+        if (!live()) return;
+        setupCode.clear();
+        location.href = `${url}/`;
+        return;
+      } catch { /* not yet */ }
+      await new Promise((r) => setTimeout(r, 4000));
+    }
+    if (!live()) return;
+    state.authDomain = url; // log in here; the login page shows the domain to use later
+    toLogin();
   };
   // Opened in a new window (or the code is wrong): ask for it, then keep following the restore.
   const askCode = () => {

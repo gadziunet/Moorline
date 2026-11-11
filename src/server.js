@@ -255,7 +255,8 @@ app.get('/api/setup/restore/status', (req, res) => {
   const st = backups.serverRestoreStatus();
   if (!st) return fail(req, res, 404, 'notFound'); // e.g. the panel restarted: nothing to follow
   if (!req.user && !setupToken.check(req.get('X-Setup-Code'))) return fail(req, res, 403, 'setup.badCode');
-  res.json(st);
+  // After a good restore: the panel's own address from the restored settings, so the wizard can go there.
+  res.json({ ...st, panelUrl: st.done && !st.error ? domains.panelUrl() || null : null });
 });
 
 app.use('/api', requireAuth);
