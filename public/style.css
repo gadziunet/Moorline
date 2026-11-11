@@ -233,7 +233,7 @@ textarea.env { min-height: 120px; }
 .terminal.tall { height: 70vh; }
 /* A single command to type on the server (e.g. where to find the setup code). */
 .cmd { display: block; background: var(--term-bg); color: var(--term-text); font-family: var(--mono); font-size: 13px;
-  padding: 8px 12px; margin: 6px 0 2px; user-select: all; white-space: pre-wrap; word-break: break-all; }
+  padding: 8px 12px; margin: 6px 0 2px; user-select: all; white-space: pre-wrap; word-break: normal; overflow-wrap: anywhere; }
 .cmd::before { content: "$ "; opacity: .55; user-select: none; }
 .notice { padding: 10px 14px; margin-bottom: 12px; font-size: 14px; background: var(--sunken); }
 .notice ul { margin: 6px 0 0; padding-left: 18px; }

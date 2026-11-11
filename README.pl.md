@@ -16,7 +16,7 @@ Na czystym Debianie, Ubuntu albo Raspberry Pi OS (x86_64 lub arm64):
 curl -fsSL https://raw.githubusercontent.com/gadziunet/stackmoor/main/install.sh | sudo bash
 ```
 
-Skrypt instaluje Dockera, jeśli go brakuje, uruchamia Stackmoor i wypisuje adres, np. `http://192.168.1.50:5001`. Przy pierwszym wejściu tworzysz konto administratora.
+Skrypt instaluje Dockera, jeśli go brakuje, uruchamia Stackmoor i wypisuje adres oraz jednorazowy kod instalacyjny, np. `http://192.168.1.50:5001` i `K7QM-4XWD-9TPA`. Przy pierwszym wejściu wpisujesz kod i tworzysz konto administratora – dzięki temu nikt inny w Twojej sieci nie zrobi tego przed Tobą. Zgubiony kod: `docker logs stackmoor | grep "Setup code"`.
 
 Ponowne uruchomienie tego samego polecenia aktualizuje panel. Opcjonalnie: `curl ... | sudo PORT=8080 STACKS_DIR=/srv/stacks bash`.
 
@@ -34,6 +34,8 @@ Ponowne uruchomienie tego samego polecenia aktualizuje panel. Opcjonalnie: `curl
 - restart serwera z panelu albo według harmonogramu; stacki, które działały, uruchamiają się ponownie – także te bez `restart:`
 - powiadomienia e-mailem, przez Telegram, ntfy, Pushover albo webhook – np. gdy nie uda się kopia, stack przestanie działać albo padnie VPN
 - publiczne adresy przez Twojego Pangolina – panel sam tworzy site, uruchamia Newt i dodaje zasoby
+- strona „uruchamia się” zamiast kręcącego się kółka, gdy panel, aplikacja albo serwer za proxy startuje po restarcie lub aktualizacji
+- zabezpieczony od początku: jednorazowy kod instalacyjny, limit logowania nie do obejścia podrobionymi nagłówkami, nagłówki bezpieczeństwa (CSP, zakaz osadzania), sprawdzane przywracanie
 - interfejs po polsku i angielsku
 
 ## Automatyczne wolumeny
@@ -116,6 +118,9 @@ To, co idzie tunelem, wynika z `AllowedIPs` w Twoim pliku. **Blokada (kill switc
 - [x] Automatyczne aktualizacje stacków (domyślnie wyłączone) z kopią przed aktualizacją i powrotem do poprzedniej wersji, gdy nowa się nie uruchomi; restart serwera z panelu i według harmonogramu; automatyczne łatki systemu (Debian/Ubuntu)
 - [x] Powiadomienia (e-mail, Telegram, ntfy, Pushover, webhooki): nieudane kopie, stack, który przestał działać, VPN albo proxy nie działa, automatyczne aktualizacje, restarty
 - [x] Pangolin – publiczne adresy obok lokalnej domeny, z logowaniem Pangolina przed aplikacją; foldery pomijane w kopiach
+- [x] Wzmocnienie bezpieczeństwa (0.13): kod instalacyjny przy nowej instalacji, przekazywane nagłówki tylko od Caddy, asynchroniczne hashowanie haseł, nagłówki bezpieczeństwa, sprawdzane przywracanie; strona ładowania z Caddy
+- [ ] Dalsze wzmocnienia: osobna sieć Dockera dla Caddy i panelu, ściślejsze sprawdzanie konfiguracji VPN, bezpieczniejszy zapis plików w folderach stacków
+- [ ] Więcej języków interfejsu
 - [ ] Szablon Unraid w Community Apps
 
 ## Rozwój

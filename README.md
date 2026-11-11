@@ -16,7 +16,7 @@ On a clean Debian, Ubuntu or Raspberry Pi OS machine (x86_64 or arm64):
 curl -fsSL https://raw.githubusercontent.com/gadziunet/stackmoor/main/install.sh | sudo bash
 ```
 
-The script installs Docker if it's missing, starts Stackmoor and prints its address, e.g. `http://192.168.1.50:5001`. On first visit you create the administrator account.
+The script installs Docker if it's missing, starts Stackmoor and prints its address and a one-time setup code, e.g. `http://192.168.1.50:5001` and `K7QM-4XWD-9TPA`. On first visit you enter the code and create the administrator account – so nobody else on your network can do it before you. Lost the code? `docker logs stackmoor | grep "Setup code"`.
 
 Run the same command again to update. Optional settings: `curl ... | sudo PORT=8080 STACKS_DIR=/srv/stacks bash`.
 
@@ -34,6 +34,8 @@ Run the same command again to update. Optional settings: `curl ... | sudo PORT=8
 - restart the server from the panel or on a schedule; stacks that were running start again – also those without `restart:`
 - notifications by e-mail, Telegram, ntfy, Pushover or webhook – e.g. when a backup fails, a stack stops or the VPN goes down
 - public addresses through your own Pangolin – the panel creates the site, runs Newt and adds resources by itself
+- a "starting" page instead of a spinning browser while the panel, an app or a proxy target comes up after a reboot or an update
+- hardened by default: one-time setup code, login limit that can't be bypassed with forged headers, security headers (CSP, no framing), checked restores
 - English and Polish interface
 
 ## Automatic volumes
@@ -107,6 +109,9 @@ What goes through the tunnel follows `AllowedIPs` in your file. **Kill switch is
 - [x] Automatic stack updates (off by default) with a backup first and rollback when the new version doesn't start; server restart from the panel and on a schedule; automatic system patches (Debian/Ubuntu)
 - [x] Notifications (e-mail, Telegram, ntfy, Pushover, webhooks): failed backups, a stack that stopped, VPN or proxy down, automatic updates, restarts
 - [x] Pangolin – public addresses next to the local domain, with Pangolin's login in front; folders left out of backups
+- [x] Security hardening (0.13): setup code for a fresh install, forwarded headers trusted only from Caddy, async password hashing, security headers, checked restores; starting page from Caddy
+- [ ] More hardening: a separate Docker network for Caddy and the panel, stricter VPN config checks, safer file writes in stack folders
+- [ ] More interface languages
 - [ ] Unraid Community Apps template
 
 ## Development
