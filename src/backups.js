@@ -8,6 +8,7 @@ import { encrypt, decrypt, mask, initSecrets } from './secrets.js';
 import {
   DESTINATIONS, destinationById, repoUrl, dumpKind, dumpCommand, restoreCommand, readyCommand,
   DUMP_FILE, dataFolders, containerName, retentionArgs, isDue, localParts, newRunId, groupRuns, cleanExcludes, excludeArgs,
+  snapshotStack, cleanManifest,
 } from './backup-plan.js';
 
 // Backups with restic, the Cloudron way:
@@ -468,18 +469,22 @@ export function createBackups({ db, stacks, stacksDir, dataDir, sqlite }) {
       if (/does not exist|Is there a repository|unable to open config/i.test(r.stderr)) return [];
       throw new UserError('backup.repoError', { output: resticError(r) });
     }
-    const list = (JSON.parse(r.stdout || '[]') || []).map((s) => ({
-      id: s.id,
-      shortId: s.short_id || s.id.slice(0, 8),
-      time: s.time,
-      tags: s.tags || [],
-      paths: s.paths || [],
-      stack: (s.tags || []).find((x) => x.startsWith('stack:'))?.slice(6) || null,
-      system: (s.tags || []).includes('system'),
-      preUpdate: (s.tags || []).includes('pre-update'),
-      run: (s.tags || []).find((x) => x.startsWith('run:'))?.slice(4) || null,
-      size: s.summary?.total_bytes_processed ?? null,
-    })).sort((a, b) => b.time.localeCompare(a.time));
+    const list = (JSON.parse(r.stdout || '[]') || [])
+      // A snapshot whose stack tag is not a stack name could restore outside the stacks folder.
+      .filter((s) => snapshotStack(s.tags) !== false)
+      .map((s) => ({
+        id: s.id,
+        shortId: s.short_id || s.id.slice(0, 8),
+        time: s.time,
+        tags: s.tags || [],
+        paths: s.paths || [],
+        stack: snapshotStack(s.tags),
+        system: (s.tags || []).includes('system'),
+        preUpdate: (s.tags || []).includes('pre-update'),
+        run: (s.tags || []).find((x) => x.startsWith('run:'))?.slice(4) || null,
+        size: s.summary?.total_bytes_processed ?? null,
+      }))
+      .sort((a, b) => b.time.localeCompare(a.time));
     setState(db, 'backup.snapshots', { at: new Date().toISOString(), list });
     return list;
   }
@@ -506,6 +511,8 @@ export function createBackups({ db, stacks, stacksDir, dataDir, sqlite }) {
 
   /** Restores one stack snapshot into stack `name`. Writes to out(). */
   async function restoreStack(snap, name, log, t) {
+    // The name becomes a folder in the stacks folder: never anything else (e.g. from a snapshot tag).
+    stacks.assertName(name);
     // Everything is written to log() and also kept for the stack's history.
     let output = '';
     const out = (text) => { output += text; log(text); };
@@ -531,6 +538,7 @@ export function createBackups({ db, stacks, stacksDir, dataDir, sqlite }) {
         // Databases start empty (their files were not in the backup) and get the dump.
         await stacks.prepare(name, out, t);
         const cfg = await stacks.config(name);
+        manifest = cleanManifest(manifest, Object.keys(cfg.services || {}));
         const up = await stacks.compose(name, ['up', '-d', ...manifest.map((m) => m.service)], out);
         if (up.code !== 0) throw new UserError('step.exitCode', { code: up.code });
         for (const m of manifest) {

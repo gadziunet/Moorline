@@ -1,5 +1,6 @@
 // Pure helpers for backups (no Docker, no database) – easy to test.
 import path from 'node:path';
+import { NAME_RE } from './names.js';
 
 // ---------- destinations ----------
 
@@ -262,4 +263,38 @@ export function cleanExcludes(list) {
 }
 
 /** restic --exclude arguments: each path anchored in the stack folder. */
+/**
+ * The stack a snapshot belongs to, from its "stack:<name>" tag. A tag that is not a valid
+ * stack name (e.g. "stack:../../app") makes the snapshot unusable: `false`, so it is left out.
+ * No tag at all: null (system snapshots).
+ */
+export function snapshotStack(tags) {
+  const tag = (tags || []).find((x) => String(x).startsWith('stack:'));
+  if (tag === undefined) return null;
+  const name = String(tag).slice(6);
+  return NAME_RE.test(name) ? name : false;
+}
+
+/**
+ * The databases listed in a restored stack's dumps/manifest.json, checked before anything is run:
+ * a known kind, a service of the restored compose file, and exactly the file name a backup writes
+ * (`<service>.<kind file>`) – never a path. Throws { key } on anything else.
+ */
+export function cleanManifest(entries, services) {
+  const list = Array.isArray(entries) ? entries : [];
+  const known = new Set(services || []);
+  return list.map((m) => {
+    const kind = String(m?.kind ?? '');
+    const service = String(m?.service ?? '');
+    const file = String(m?.file ?? '');
+    if (!DUMP_FILE[kind] || !known.has(service) || file !== `${service}.${DUMP_FILE[kind]}`) {
+      const err = new Error(`bad manifest entry: ${service}`);
+      err.key = 'backup.badManifest';
+      err.vars = { service };
+      throw err;
+    }
+    return { ...m, kind, service, file };
+  });
+}
+
 export const excludeArgs = (dir, patterns) => patterns.flatMap((p) => ['--exclude', `${dir.replace(/\/+$/, '')}/${p}`]);

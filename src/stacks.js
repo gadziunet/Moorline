@@ -4,8 +4,10 @@ import { docker, parseJsonLines } from './docker.js';
 import { normalizeCompose, addImageVolumes, isFileLikeTarget } from './compose.js';
 import { UserError } from './errors.js';
 import { publishedPorts, findConflicts, portFromDockerError } from './ports.js';
+import { NAME_RE } from './names.js';
 
-export const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,62}$/;
+export { NAME_RE };
+
 const COMPOSE_FILES = ['compose.yaml', 'compose.yml', 'docker-compose.yaml', 'docker-compose.yml'];
 const ACTIONS = new Set(['up', 'stop', 'restart', 'down', 'update']);
 

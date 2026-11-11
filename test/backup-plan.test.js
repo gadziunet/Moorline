@@ -121,3 +121,31 @@ test('paths left out of a stack backup', async () => {
   assert.deepEqual(excludeArgs('/opt/stacks/immich/', ['data/thumbs', 'data/**/cache']),
     ['--exclude', '/opt/stacks/immich/data/thumbs', '--exclude', '/opt/stacks/immich/data/**/cache']);
 });
+
+test('snapshot stack tag: only a stack name is accepted, a path makes the snapshot unusable', async () => {
+  const { snapshotStack } = await import('../src/backup-plan.js');
+  assert.equal(snapshotStack(['run:x', 'stack:wordpress']), 'wordpress');
+  assert.equal(snapshotStack(['system', 'run:x']), null);
+  assert.equal(snapshotStack([]), null);
+  for (const bad of ['stack:../../../app/src', 'stack:/etc', 'stack:a/b', 'stack:', 'stack:-p', 'stack:Big', 'stack:.hidden']) {
+    assert.equal(snapshotStack([bad]), false, bad);
+  }
+});
+
+test('dump manifest: only known kinds, services of the stack and the exact file name are used', async () => {
+  const { cleanManifest } = await import('../src/backup-plan.js');
+  const services = ['db', 'app'];
+  assert.deepEqual(cleanManifest([{ service: 'db', kind: 'postgres', file: 'db.postgres.sql', size: 10 }], services),
+    [{ service: 'db', kind: 'postgres', file: 'db.postgres.sql', size: 10 }]);
+  assert.deepEqual(cleanManifest(undefined, services), []);
+  const bad = [
+    { service: 'db', kind: 'postgres', file: '../../../../app/data/secret.key' }, // a path instead of the dump
+    { service: 'db', kind: 'postgres', file: 'other.postgres.sql' },              // another file
+    { service: 'db', kind: 'shell', file: 'db.shell.sql' },                       // unknown kind
+    { service: '--privileged', kind: 'postgres', file: '--privileged.postgres.sql' }, // not a service
+    { service: 'cache', kind: 'redis', file: 'cache.redis' },                     // redis has no dump file
+  ];
+  for (const m of bad) {
+    assert.throws(() => cleanManifest([m], services), (e) => e.key === 'backup.badManifest', JSON.stringify(m));
+  }
+});
