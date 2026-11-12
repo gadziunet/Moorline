@@ -66,7 +66,50 @@ function startingRoute(kind, hosts) {
 // - Config is JSON written to disk and loaded with `caddy reload` – no admin port exposed.
 
 export const NETWORK = 'stackmoor';
+// Caddy and the panel only. Apps sit on NETWORK with Caddy, so they can't reach the panel directly
+// (like a guest network that can't open the router's admin page). Internal: no way out from here.
+export const ADMIN_NETWORK = 'stackmoor-admin';
 const CADDY = 'stackmoor-caddy';
+
+/**
+ * Docker commands that put the panel and Caddy on the right networks, in a safe order:
+ * Caddy joins the admin network first, then the panel, and only then the panel leaves the apps'
+ * network – so Caddy can reach the panel at every moment.
+ * @param {{ self: string, selfNets: string[], caddyNets: string[] | null }} p  caddyNets null: no Caddy
+ */
+export function networkSteps({ self, selfNets, caddyNets }) {
+  const steps = [];
+  if (caddyNets && !caddyNets.includes(ADMIN_NETWORK)) steps.push(['network', 'connect', ADMIN_NETWORK, CADDY]);
+  if (!selfNets.includes(ADMIN_NETWORK)) steps.push(['network', 'connect', ADMIN_NETWORK, self]);
+  // Leave the apps' network only when the panel keeps a normal network of its own (internet:
+  // backups, notifications, update checks) – the admin network is internal.
+  const ownNet = selfNets.some((n) => n !== NETWORK && n !== ADMIN_NETWORK);
+  if (selfNets.includes(NETWORK) && ownNet) steps.push(['network', 'disconnect', NETWORK, self]);
+  return steps;
+}
+
+/** Caddy's compose file: on the apps' network and on the admin network. */
+export function caddyComposeSpec({ image, httpPort, httpsPort }) {
+  return {
+    name: CADDY,
+    services: {
+      caddy: {
+        image,
+        container_name: CADDY,
+        restart: 'unless-stopped',
+        command: ['caddy', 'run', '--config', '/etc/caddy/caddy.json'],
+        ports: [`${httpPort}:80`, `${httpsPort}:443`, `${httpsPort}:443/udp`],
+        volumes: ['./config:/etc/caddy', './data:/data', './runtime:/config'],
+        extra_hosts: ['host.docker.internal:host-gateway'],
+        networks: [NETWORK, ADMIN_NETWORK],
+      },
+    },
+    networks: {
+      [NETWORK]: { external: true, name: NETWORK },
+      [ADMIN_NETWORK]: { external: true, name: ADMIN_NETWORK },
+    },
+  };
+}
 const OVERRIDE = 'compose.stackmoor.yaml';
 const SUBDOMAIN_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 const DOMAIN_RE = /^(?=.{3,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
@@ -525,22 +568,7 @@ export function createDomains({ db, stacks, stacksDir, getSettings, saveSettings
   }
 
   function caddyCompose(s) {
-    return {
-      name: CADDY,
-      services: {
-        caddy: {
-          image,
-          container_name: CADDY,
-          restart: 'unless-stopped',
-          command: ['caddy', 'run', '--config', '/etc/caddy/caddy.json'],
-          ports: [`${s.httpPort}:80`, `${s.httpsPort}:443`, `${s.httpsPort}:443/udp`],
-          volumes: ['./config:/etc/caddy', './data:/data', './runtime:/config'],
-          extra_hosts: ['host.docker.internal:host-gateway'],
-          networks: [NETWORK],
-        },
-      },
-      networks: { [NETWORK]: { external: true, name: NETWORK } },
-    };
+    return caddyComposeSpec({ image, httpPort: s.httpPort, httpsPort: s.httpsPort });
   }
 
   const composeArgs = () => ['compose', '--ansi', 'never', '--progress', 'plain', '-p', CADDY,
@@ -549,6 +577,39 @@ export function createDomains({ db, stacks, stacksDir, getSettings, saveSettings
   async function ensureNetwork() {
     const r = await docker(['network', 'inspect', NETWORK]);
     if (r.code !== 0) await docker(['network', 'create', NETWORK]);
+    const a = await docker(['network', 'inspect', ADMIN_NETWORK]);
+    if (a.code === 0) return true;
+    const c = await docker(['network', 'create', '--internal', ADMIN_NETWORK]);
+    if (c.code !== 0) console.error(`Could not create the ${ADMIN_NETWORK} network: ${c.output.trim()}`);
+    return c.code === 0;
+  }
+
+  /** Names of the networks a container is on, or null when it doesn't exist. */
+  async function networksOf(container) {
+    const r = await docker(['inspect', '--format', '{{json .NetworkSettings.Networks}}', container]);
+    if (r.code !== 0) return null;
+    try { return Object.keys(JSON.parse(r.stdout || '{}') || {}); } catch { return []; }
+  }
+
+  /** Panel on the admin network (with Caddy) and off the apps' network. Safe to run again. */
+  // Never leaves the panel unreachable: it leaves the apps' network only after Docker confirms
+  // that both the panel and Caddy are on the admin network.
+  async function placeSelf(self) {
+    const selfNets = await networksOf(self);
+    if (!selfNets) return;
+    const caddyNets = await networksOf(CADDY);
+    for (const step of networkSteps({ self, selfNets, caddyNets })) {
+      if (step[1] === 'disconnect') {
+        const now = await networksOf(self);
+        const caddyNow = await networksOf(CADDY);
+        if (!now?.includes(ADMIN_NETWORK) || (caddyNow && !caddyNow.includes(ADMIN_NETWORK))) return;
+      }
+      const r = await docker(step);
+      if (r.code !== 0) {
+        console.error(`docker ${step.join(' ')} failed: ${r.output.trim()}`);
+        return;
+      }
+    }
   }
 
   /** Writes Caddy's files, (re)starts it and reloads the config. Streams output through log(). */
@@ -562,7 +623,7 @@ export function createDomains({ db, stacks, stacksDir, getSettings, saveSettings
     if (!s.dnsProvider) throw new UserError('dns.badProvider');
 
     await ensureRecord(log, t);
-    await ensureNetwork();
+    if (!await ensureNetwork()) throw new UserError('dns.adminNetworkFailed', { name: ADMIN_NETWORK });
     writeFile(path.join(caddyDir, 'compose.yaml'), stringify(caddyCompose(s)));
     // The JSON holds the DNS API key, so only root may read it.
     writeFile(path.join(caddyDir, 'config', 'caddy.json'), JSON.stringify(await buildConfig(), null, 2), 0o600);
@@ -575,9 +636,8 @@ export function createDomains({ db, stacks, stacksDir, getSettings, saveSettings
       if (conflicts.length) throw new UserError('ports.conflicts', { conflicts });
     }
 
-    // Connect the panel and running routed containers to the shared network.
+    // Running routed containers join the apps' network; the panel only its own network with Caddy.
     const self = await selfContainer();
-    if (self) await docker(['network', 'connect', NETWORK, self]);
     for (const r of routes()) {
       try {
         const c = await stacks.config(r.stack);
@@ -595,6 +655,7 @@ export function createDomains({ db, stacks, stacksDir, getSettings, saveSettings
     const before = await containerId();
     const r = await docker([...composeArgs(), 'up', '-d', '--remove-orphans'], { onData: log });
     if (r.code !== 0) throw new UserError('step.exitCode', { code: r.code });
+    if (self) await placeSelf(self);
 
     // A freshly (re)created container has just read the config – reloading it right away
     // would cancel the certificate request it started. Otherwise reload; without --force
@@ -607,16 +668,23 @@ export function createDomains({ db, stacks, stacksDir, getSettings, saveSettings
     log(t('dns.log.applied') + '\n');
   }
 
-  /** On start: a recreated panel container (e.g. after an update) has left the shared network. */
+  /**
+   * On start: a recreated panel container (e.g. after an update) has left Caddy's network.
+   * Also moves older installations (panel on the apps' network) to the admin network, and
+   * rewrites Caddy's compose.yaml so a recreated Caddy keeps the admin network.
+   */
   async function attachSelf() {
-    if (!getSettings().domain) return;
+    const s = getSettings();
+    if (!s.domain) return;
     const self = await selfContainer();
     if (!self) return;
-    await ensureNetwork();
-    const r = await docker(['inspect', '--format', '{{json .NetworkSettings.Networks}}', self]);
-    if (r.code === 0 && !(NETWORK in (JSON.parse(r.stdout || '{}') || {}))) {
-      await docker(['network', 'connect', NETWORK, self]);
-    }
+    // Without the admin network nothing moves: the panel stays where Caddy can reach it.
+    if (!await ensureNetwork()) return;
+    const composeFile = path.join(caddyDir, 'compose.yaml');
+    try {
+      if (!fs.readFileSync(composeFile, 'utf8').includes(ADMIN_NETWORK)) writeFile(composeFile, stringify(caddyCompose(s)));
+    } catch { /* Caddy was never set up here */ }
+    await placeSelf(self);
   }
 
   async function containerId() {
@@ -626,20 +694,29 @@ export function createDomains({ db, stacks, stacksDir, getSettings, saveSettings
 
   // Caddy's address on the shared network: with the IP lock on, only it may talk to the panel.
   let caddyIp = null;
+  let caddyIps = [];
   // Only when the panel itself runs in a container on that network (otherwise Caddy reaches it
   // through host.docker.internal and the Host header is all we can check).
   // A failed docker call keeps the address we know: only a removed or stopped Caddy clears it.
   async function refreshCaddyIp() {
     if (!await selfContainer()) {
-      if (!isInContainer()) caddyIp = null;
+      if (!isInContainer()) { caddyIp = null; caddyIps = []; }
       return caddyIp;
     }
-    const r = await docker(['inspect', '--format', `{{with index .NetworkSettings.Networks "${NETWORK}"}}{{.IPAddress}}{{end}}`, CADDY]);
+    // The address Caddy talks to the panel from: on the admin network (the apps' network only
+    // for an installation that hasn't moved yet).
+    const fmt = `{{with index .NetworkSettings.Networks "${ADMIN_NETWORK}"}}{{.IPAddress}}{{end}}|{{with index .NetworkSettings.Networks "${NETWORK}"}}{{.IPAddress}}{{end}}`;
+    const r = await docker(['inspect', '--format', fmt, CADDY]);
     if (r.code !== 0) {
-      if (/no such (object|container)/i.test(r.output)) caddyIp = null;
+      if (/no such (object|container)/i.test(r.output)) { caddyIp = null; caddyIps = []; }
       return caddyIp;
     }
-    caddyIp = r.stdout.trim() || null;
+    const [admin, apps] = r.stdout.trim().split('|');
+    const selfNets = await networksOf(await selfContainer());
+    if (!selfNets) return caddyIp; // a failed docker call keeps the addresses we know
+    // Every network the panel shares with Caddy (both while an older install is moving over).
+    caddyIps = [admin && selfNets.includes(ADMIN_NETWORK) ? admin : '', apps && selfNets.includes(NETWORK) ? apps : ''].filter(Boolean);
+    caddyIp = caddyIps[0] || null;
     return caddyIp;
   }
 
@@ -730,5 +807,7 @@ export function createDomains({ db, stacks, stacksDir, getSettings, saveSettings
     publicConfig, saveConfig, check, routes, setRoutes, removeStack, writeOverride, apply, status, buildConfig, vpn, pangolin, upstreamFor, ensureNetwork,
     panelUrl, refreshCaddyIp, attachSelf, savePanel, reloadConfig, syncImage, detectServerIp, syncServerIp, retryCertificate,
     caddyIp: () => caddyIp,
+    /** Is this address one of Caddy's (on a network it shares with the panel)? */
+    isCaddy: (ip) => Boolean(ip) && caddyIps.includes(String(ip).replace(/^::ffff:/, '')),
   };
 }

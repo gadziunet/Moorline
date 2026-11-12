@@ -96,3 +96,19 @@ test('panel lock: a refused request makes the panel ask Docker for Caddy again (
   lock.middleware(req, res, () => {});
   assert.equal(asked, 1);
 });
+
+test('panel lock: while the panel is on both networks, either of Caddy\'s addresses gets in', () => {
+  const lock = createPanelLock({
+    getSettings: () => settings,
+    domains: {
+      caddyIp: () => '172.30.0.2',
+      isCaddy: (ip) => ['172.30.0.2', '172.20.0.2'].includes(ip),
+      panelUrl: () => 'https://panel.dom.example.com',
+    },
+    env: {},
+    inContainer: true,
+  });
+  assert.ok(run(lock, { socket: { remoteAddress: '172.30.0.2' } }).next);
+  assert.ok(run(lock, { socket: { remoteAddress: '::ffff:172.20.0.2' } }).next);
+  assert.equal(run(lock, { socket: { remoteAddress: '172.20.0.9' } }).status, 302);
+});

@@ -124,7 +124,7 @@ app.disable('x-powered-by');
 const plainIp = (ip) => String(ip || '').replace(/^::ffff:/, '');
 app.set('trust proxy', (addr) => {
   const ip = plainIp(addr);
-  return ip === '127.0.0.1' || ip === '::1' || (Boolean(domains.caddyIp()) && ip === domains.caddyIp());
+  return ip === '127.0.0.1' || ip === '::1' || domains.isCaddy(ip);
 });
 // Security headers for every answer: no framing (clickjacking), no MIME sniffing, scripts and
 // styles only from the panel itself. HSTS only when the page was opened over https.

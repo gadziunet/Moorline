@@ -35,7 +35,8 @@ export function createPanelLock({ getSettings, domains, env = process.env, inCon
     // stopped or being replaced) nobody gets in – a Host header is easy to fake.
     // Outside Docker (development) Caddy reaches the panel through the host: only Host is left.
     const caddy = domains.caddyIp();
-    if (caddy && remote === caddy) return next();
+    const fromCaddy = domains.isCaddy ? domains.isCaddy(remote) : remote === caddy;
+    if (caddy && fromCaddy) return next();
     if (!caddy && inContainer) {
       nudge();
       res.setHeader('Retry-After', '5');

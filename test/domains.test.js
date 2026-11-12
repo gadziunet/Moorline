@@ -89,3 +89,37 @@ test('starting page: Caddy answers "not reachable" with a page that reloads by i
   assert.match(panel.handle[0].body, /redirect: 'manual'/);
   assert.match(panel.handle[0].body, /location\.replace\(location\.href\)/);
 });
+
+test('admin network: Caddy is on both networks, the admin one only for Caddy and the panel', async () => {
+  const { caddyComposeSpec, NETWORK, ADMIN_NETWORK } = await import('../src/domains.js');
+  assert.notEqual(NETWORK, ADMIN_NETWORK);
+  const c = caddyComposeSpec({ image: 'ghcr.io/x/stackmoor-caddy:1.0.0', httpPort: 80, httpsPort: 443 });
+  assert.deepEqual(c.services.caddy.networks, [NETWORK, ADMIN_NETWORK]);
+  assert.deepEqual(c.networks[ADMIN_NETWORK], { external: true, name: ADMIN_NETWORK });
+  assert.deepEqual(c.services.caddy.ports, ['80:80', '443:443', '443:443/udp']);
+});
+
+test('admin network: an older installation moves over in a safe order, a new one needs nothing', async () => {
+  const { networkSteps, NETWORK, ADMIN_NETWORK } = await import('../src/domains.js');
+  // before: panel and Caddy only on the apps' network
+  assert.deepEqual(networkSteps({ self: 'stackmoor', selfNets: ['stackmoor_default', NETWORK], caddyNets: [NETWORK] }), [
+    ['network', 'connect', ADMIN_NETWORK, 'stackmoor-caddy'], // Caddy first …
+    ['network', 'connect', ADMIN_NETWORK, 'stackmoor'],       // … then the panel …
+    ['network', 'disconnect', NETWORK, 'stackmoor'],          // … and only then it leaves the apps
+  ]);
+  // already moved: nothing to do
+  assert.deepEqual(networkSteps({ self: 'stackmoor', selfNets: ['stackmoor_default', ADMIN_NETWORK], caddyNets: [NETWORK, ADMIN_NETWORK] }), []);
+  // panel recreated after an update (fresh container, only its own network)
+  assert.deepEqual(networkSteps({ self: 'stackmoor', selfNets: ['stackmoor_default'], caddyNets: [NETWORK, ADMIN_NETWORK] }), [
+    ['network', 'connect', ADMIN_NETWORK, 'stackmoor'],
+  ]);
+  // a panel whose only normal network is the apps' one keeps it (the admin network has no internet)
+  assert.deepEqual(networkSteps({ self: 'stackmoor', selfNets: [NETWORK], caddyNets: [NETWORK] }), [
+    ['network', 'connect', ADMIN_NETWORK, 'stackmoor-caddy'],
+    ['network', 'connect', ADMIN_NETWORK, 'stackmoor'],
+  ]);
+  // no Caddy container yet
+  assert.deepEqual(networkSteps({ self: 'stackmoor', selfNets: [], caddyNets: null }), [
+    ['network', 'connect', ADMIN_NETWORK, 'stackmoor'],
+  ]);
+});
