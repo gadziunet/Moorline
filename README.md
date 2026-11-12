@@ -110,7 +110,8 @@ What goes through the tunnel follows `AllowedIPs` in your file. **Kill switch is
 - [x] Notifications (e-mail, Telegram, ntfy, Pushover, webhooks): failed backups, a stack that stopped, VPN or proxy down, automatic updates, restarts
 - [x] Pangolin – public addresses next to the local domain, with Pangolin's login in front; folders left out of backups
 - [x] Security hardening (0.13): setup code for a fresh install, forwarded headers trusted only from Caddy, async password hashing, security headers, checked restores; starting page from Caddy
-- [ ] More hardening: a separate Docker network for Caddy and the panel, stricter VPN config checks, safer file writes in stack folders
+- [x] A separate internal Docker network for Caddy and the panel – apps can't reach the panel directly (0.13.1)
+- [ ] More hardening: stricter VPN config checks, safer file writes in stack folders
 - [ ] More interface languages
 - [ ] Unraid Community Apps template
 

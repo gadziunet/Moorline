@@ -119,7 +119,8 @@ To, co idzie tunelem, wynika z `AllowedIPs` w Twoim pliku. **Blokada (kill switc
 - [x] Powiadomienia (e-mail, Telegram, ntfy, Pushover, webhooki): nieudane kopie, stack, który przestał działać, VPN albo proxy nie działa, automatyczne aktualizacje, restarty
 - [x] Pangolin – publiczne adresy obok lokalnej domeny, z logowaniem Pangolina przed aplikacją; foldery pomijane w kopiach
 - [x] Wzmocnienie bezpieczeństwa (0.13): kod instalacyjny przy nowej instalacji, przekazywane nagłówki tylko od Caddy, asynchroniczne hashowanie haseł, nagłówki bezpieczeństwa, sprawdzane przywracanie; strona ładowania z Caddy
-- [ ] Dalsze wzmocnienia: osobna sieć Dockera dla Caddy i panelu, ściślejsze sprawdzanie konfiguracji VPN, bezpieczniejszy zapis plików w folderach stacków
+- [x] Osobna, wewnętrzna sieć Dockera dla Caddy i panelu – aplikacje nie mają bezpośredniego dostępu do panelu (0.13.1)
+- [ ] Dalsze wzmocnienia: ściślejsze sprawdzanie konfiguracji VPN, bezpieczniejszy zapis plików w folderach stacków
 - [ ] Więcej języków interfejsu
 - [ ] Szablon Unraid w Community Apps
 
